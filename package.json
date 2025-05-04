@@ -1,0 +1,15 @@
+{
+  "name": "parsergenerator",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "test": "node samplerun.js"
+  },
+  "keywords": [
+    "parser",
+    "generator"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}

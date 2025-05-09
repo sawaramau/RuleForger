@@ -735,7 +735,12 @@ class BnfAstManager extends AbstractManager {
             }
         };
         getParsers(nameSpace);
-        return spaces;
+        return spaces.sort((l, r) => {
+            if(l.left.pos.line !== r.left.pos.line) {
+                return l.left.pos.line - r.left.pos.line;
+            }
+            return l.left.pos.column - r.left.pos.column;
+        });
     }
     #getRootNameSpace(nameSpace) {
         const hierarchy = [];
@@ -753,7 +758,7 @@ class BnfAstManager extends AbstractManager {
         const root = this.#getRootNameSpace(nameSpace);
         if(root) {
             const spaces = this.#serializeNameSpace(root);
-            return spaces.filter(space => space !== nameSpace);
+            return spaces;
         }
         return [];
     }
@@ -811,11 +816,26 @@ class BnfAstManager extends AbstractManager {
         const nameSpace = this.getNameSpace(hierarchy);
         Object.defineProperty(nameSpace, "lexicalParser", {
             get: () => {
-                // assign時点では左再帰未対策のため，getterにて登録する．
+                // assign時点では左再帰未対策のため，getterで登録する．
                 const lexicalParser = AssignRight.generateSecondaryParser(right);
                 return lexicalParser;
-            }
-        })
+            },
+            configurable: true,
+        });
+        Object.defineProperty(nameSpace, "localBaseParser", {
+            value: () => {
+                // assign時点では左再帰未対策のため，getterで登録する．
+                return nameSpace.lexicalParser;
+            },
+            configurable: true,
+        });
+        Object.defineProperty(nameSpace, "localRecursiveParser", {
+            value: () => {
+                // assign時点では左再帰未対策のため，getterで登録する．
+                return null;
+            },
+            configurable: true,
+        });
         nameSpace.left = left;
         nameSpace.right = right;
         nameSpace.hierarchy = hierarchy;
@@ -996,14 +1016,12 @@ class BnfAstManager extends AbstractManager {
         const nameSpace = target;
         const {right, left, recursiveFirstTerms} = nameSpace;
         const relatedSpaces = this.#getRelatedNameSpaces(nameSpace);
-        if(!nameSpace.hasNonRecursiveTerms) {
-            const relatedCond = relatedSpaces.filter(space => space.hasNonRecursiveTerms)
-            if(relatedCond.length === 0) {
-                const fullName = this.getFullNameStr(nameSpace);
-                throw new BnfLayerError("Left-recursive rule requires at least one base (non-recursive) case to terminate. " +
-                    "(Line:" + nameSpace.left.pos.line + " Col:" + nameSpace.left.pos.column + " " +
-                    fullName + ")", TypeError);    
-            }
+        const relatedCond = relatedSpaces.filter(space => space.hasNonRecursiveTerms);
+        if(relatedCond.length === 0) {
+            const fullName = this.getFullNameStr(nameSpace);
+            throw new BnfLayerError("Left-recursive rule requires at least one base (non-recursive) case to terminate. " +
+                "(Line:" + nameSpace.left.pos.line + " Col:" + nameSpace.left.pos.column + " " +
+                fullName + ")", TypeError);
         }
         const recSet = new Set(recursiveFirstTerms);
         const ownRightValues = right.dig(RightValue);
@@ -1015,15 +1033,12 @@ class BnfAstManager extends AbstractManager {
             const set = new Set(node.dig(UserNonTerminal));
             return set.intersection(recSet).size === 0;
         });
-        const lexicalParser = right.generateSecondaryParser;
         const baseCase = right.children[0].generateSecondaryParserWithout(recursiveRVs);
-        const relatedCase = relatedSpaces.map(space => {
-            const left = space.left;
-            
-        });
         const recursiveCase = right.children[0].generateSecondaryParserWithout(nonRecursiveRVs);
         Object.defineProperty(nameSpace, "lexicalParser", {
             get: () => {
+                const baseParser = nameSpace.baseParser();
+                const recursiveParser = nameSpace.recursiveParser();
                 const test = (strObj, index, cur) => {
                     const cache = BaseAstNode.getCache(left, strObj);
                     if(!cache.has(index)) {
@@ -1033,8 +1048,9 @@ class BnfAstManager extends AbstractManager {
                     if(!hist.inProgress) {
                         return hist.result;
                     }
-                    let seed = baseCase.test(strObj, index, cur);
+                    let seed = baseParser.test(strObj, index, cur);
                     seed.start = index;
+                    const tmp = seed;
                     hist.results.push(seed);
                     if(!seed.success) {
                         hist.result = seed;
@@ -1044,10 +1060,9 @@ class BnfAstManager extends AbstractManager {
                     // seed: {success, length, start}
                     seed.inProgress = true;
                     while(1) {
-                        const result = recursiveCase.test(strObj, index, seed);
+                        const result = recursiveParser.test(strObj, index, seed);
                         if(result.success && (result.length > seed.length)) {
                             result.start = index;
-                            // このフラグを使えばtest関数側で処理を分岐できるのでは．
                             seed.inProgress = false;
                             seed = result;
                             seed.inProgress = true;
@@ -1071,16 +1086,77 @@ class BnfAstManager extends AbstractManager {
                     }
                     const results = hist.results;
                     // このstrObjはindexが正しいが，これ以降のstrObjはseed分だけ進んで始まるので死にそう．
-                    const seedNode = baseCase.parse(strObj, hist.results[0]);
-                    if(hist.results.length === 1) {
+                    const seedNode = baseParser.parse(strObj, results[0]);
+                    if(results.length === 1) {
                         return seedNode;
                     }
-                    return recursiveCase.parse(strObj, hist.results.slice(1), seedNode);
+                    let leaf = seedNode;
+                    for(const seed of results.slice(1)) {
+                        const parent = recursiveParser.parse(strObj, seed);
+                        parent.node.str = strObj.read(seed.start, seed.length);
+                        parent.node.dig(DummyOperand, true, 1, 1)[0].swap(leaf.node);
+                        // 子要素に正しいラベルを伝える．
+                        parent.node.recursive((astChildNode) => {
+                            astChildNode.str = parent.node.str;
+                            if(astChildNode.children.length > 1) {
+                                return true;
+                            }
+                        });
+                        // 本当は親要素にも伝えたほうがいいと思うけれど，
+                        // 親要素を使ってラベルを取り出す機会は今のところないのでスルー．
+                        leaf = parent;
+                    }
+                    return leaf;
                 };
                 return {test, parse};
             }
         })
-        
+        const parser = (parsers, selectLogic = 0) => {
+            const test = (strObj, index, seed) => {
+                let max = {
+                    success: false,
+                    length: 0,
+                };
+                for(const parser of parsers) {
+                    const result = parser.test(strObj, index, seed);
+                    if(result.success && (max.length < result.length)) {
+                        max = result;
+                        result.parser = parser;
+                        if(selectLogic === 1) {
+                            return max;
+                        }
+                    }
+                }
+                return max;
+            }
+            const parse = (strObj, seed) => {
+                const result = test(strObj, strObj.ptr, seed);
+                return result.parser.parse(strObj, seed);
+            }
+            return {test, parse};
+        };
+        Object.defineProperty(nameSpace, "baseParser", {
+            value: () => {
+                const parsers = relatedSpaces.map(space => space.localBaseParser());
+                return parser(parsers);
+            }
+        });
+        Object.defineProperty(nameSpace, "recursiveParser", {
+            value: () => {
+                const parsers = relatedSpaces.map(space => space.localRecursiveParser());
+                return parser(parsers.filter(e => e));
+            }
+        });
+        Object.defineProperty(nameSpace, "localBaseParser", {
+            value: () => {
+                return baseCase;
+            }
+        });
+        Object.defineProperty(nameSpace, "localRecursiveParser", {
+            value: () => {
+                return recursiveCase;
+            }
+        });
     }
     #getNameSpaceByStr(entryPoint) {
         const ep = BnfAstManager.#Str2hierarchy(entryPoint);
@@ -2452,34 +2528,13 @@ class BnfOr extends UserGroup {
             astNode.addChild(child.node);
             return;
         };
-        const {parse} = AstNode.parserWrapper(bnfAstNode, test, process);
-        const newParse = (strObj, result = null, seed = null) => {
-            if(!result) {
+        return AstNode.parserWrapper(bnfAstNode, test, process);
+        const newParse = (strObj, seed = null) => {
+            if(!seed) {
                 return parse(strObj);
             }
             // resultが与えられているとき，左再帰のpraseなので頑張る．
-            if(!seed) {
-                // 基底ケースの解析
-                return parse(strObj);
-            }
-            let leaf = seed;
-            let i = 0;
-            for(const res of result) {
-                const parent = parse(strObj, res);
-                parent.node.str = strObj.read(res.start, res.length);
-                parent.node.dig(DummyOperand, true, 1, 1)[0].swap(leaf.node);
-                // 子要素に正しいラベルを伝える．
-                parent.node.recursive((astChildNode) => {
-                    astChildNode.str = parent.node.str;
-                    if(astChildNode.children.length > 1) {
-                        return true;
-                    }
-                });
-                // 本当は親要素にも伝えたほうがいいと思うけれど，
-                // 親要素を使ってラベルを取り出す機会は今のところないのでスルー．
-                leaf = parent;
-            }
-            return leaf;
+            return parse(strObj);
         };
         return {test, parse: newParse};
     }

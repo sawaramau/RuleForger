@@ -6,8 +6,9 @@ const {Parser} = require("./main.js")
 const str = 
 `
 entrypoint = $expr
+// expr = $v1:expr white '-' white $v2:term | {$v2:term(\`0\`)} $v1:term
 expr($c,$a) = $term:term
-expr.add = {$v3:term(\`11\`), $v4:term(\`11\`),} $v1:expr white '+' white $v2:term
+expr.add = $v1:expr white '+' white $v2:term
 expr.minus = $v1:expr white '-' white $v2:term
 // expr.add = {$v3:term(\`11\`), $v4:term(\`11\`),} $v1:term white '+' white $v2:expr
 // expr.minus = {$v3:term(\`11\`), $v4:term(\`11\`),} white $v1:term white !'+' '-' white $v2:expr
@@ -60,7 +61,7 @@ const evals = [
 parser.bnf = str;
 parser.evaluators = evals;
 parser.entryPoint = 'entrypoint';
-parser.program = "1 - 2 - 3 - 5";
+parser.program = "1 + 2 - 3 - 5";
 console.log('-------------');
 console.log(parser.bnfStr);
 console.log('-------------');

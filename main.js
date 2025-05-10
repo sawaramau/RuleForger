@@ -355,23 +355,14 @@ class AbstractManager {
 
         for(const [index, child] of children.entries()) {
             const isLastChild = index === children.length - 1;
-            const singleChildChain = (() => {
-                const newRoots = [child];
-                let currentNode = child;
-                // children.lengthが1のとき，インデント深さを抑えるために横方向にのみ展開する．
-                while(currentNode.children.length === 1) {
-                    newRoots.push(currentNode.children[0]);
-                    currentNode = currentNode.children[0];
-                }
-                return newRoots;
-            })();
+            // children.lengthが1な限り，インデント深さを抑えるために横方向に展開する．
+            const singleChildChain = this.SingleChildChain(child);
             this.dump(singleChildChain, option, newPrefix, isLastChild);
         }
     }
     static SingleChildChain(node) {
         const chain = [node];
         let currentNode = node;
-        // children.lengthが1のとき，インデント深さを抑えるために横方向にのみ展開する．
         while(currentNode.children.length === 1) {
             chain.push(currentNode.children[0]);
             currentNode = currentNode.children[0];

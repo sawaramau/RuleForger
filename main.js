@@ -355,7 +355,7 @@ class AbstractManager {
 
         for(const [index, child] of children.entries()) {
             const isLastChild = index === children.length - 1;
-            const childTree = (() => {
+            const singleChildChain = (() => {
                 const newRoots = [child];
                 let currentNode = child;
                 // children.lengthが1のとき，インデント深さを抑えるために横方向にのみ展開する．
@@ -365,9 +365,20 @@ class AbstractManager {
                 }
                 return newRoots;
             })();
-            this.dump(childTree, option, newPrefix, isLastChild);
+            this.dump(singleChildChain, option, newPrefix, isLastChild);
         }
     }
+    static SingleChildChain(node) {
+        const chain = [node];
+        let currentNode = node;
+        // children.lengthが1のとき，インデント深さを抑えるために横方向にのみ展開する．
+        while(currentNode.children.length === 1) {
+            chain.push(currentNode.children[0]);
+            currentNode = currentNode.children[0];
+        }
+        return chain;
+    }
+
     get root() {
         return this.#root;
     }
@@ -376,7 +387,7 @@ class AbstractManager {
         baseAstNode.assertUniqueTokens();
         return this.#root = baseAstNode;
     }
-    dump(roots = [this.root]) {
+    dump(roots = AbstractManager.SingleChildChain(this.root)) {
         this.constructor.dump(roots);
     }
 }
@@ -2893,8 +2904,10 @@ class RuleForger {
         }
         return this.#parserGenerator.parse(program, entryPoint);
     }
-    dumpProgramAST(program = this.#program, entryPoint = this.#entryPoint) {
-        const executer = this.parse(program, entryPoint).executer;
+    dumpProgramAST(program, entryPoint = this.#entryPoint) {
+        if(program) {
+            this.parse(program, entryPoint).parse();
+        }
         this.#parserGenerator.dumpAST();
     }
     dumpBnfAST() {

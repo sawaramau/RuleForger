@@ -1,6 +1,6 @@
 "use strict"
 
-const {Parser} = require("./main.js")
+const {RuleForger} = require("./main.js")
 
 
 const str = 
@@ -34,7 +34,7 @@ nonZero = '123456789'
 e = ''
 white = e | ' '* 
 `;
-const parser = new Parser;
+const ruleForger = new RuleForger;
 const evals = [
     {
         ruleName: "entrypoint",
@@ -46,7 +46,7 @@ const evals = [
         }
     },
     // entrypointは最初なのであえてルールを記載したが，
-    // 参照引数を1つしか設定していないルールはactionを定義せずとも自動で1つ目の引数の.valueを返却する
+    // 参照引数を1つしか設定していないルールはactionを定義せずとも自動で1つ目の引数のvalueを返却する
     // {
     //     ruleName: "line.expr",
     //     action: $ => {
@@ -85,7 +85,7 @@ const evals = [
         }
     },
     {
-        ruleName: ["term"],
+        ruleName: "term",
         // actionの第2引数はこのルールにマッチした文字列全体
         action: ($, str) => {
             // $digitsは繰り返し要素*にかかっているので配列として返却される．
@@ -94,14 +94,14 @@ const evals = [
         }
     },
 ];
-parser.bnf = str;
-parser.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
-parser.evaluators = evals;
-parser.entryPoint = 'entrypoint';
+ruleForger.bnf = str;
+ruleForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
+ruleForger.evaluators = evals;
+ruleForger.entryPoint = 'entrypoint';
 const programs = ["1 - 2 + 3", "2/3 * 4", "aa - 3"];
 for(const prog of programs) {
-    parser.program = prog;
-    const result = parser.parse();
+    ruleForger.program = prog;
+    const result = ruleForger.parse();
     console.log('Result:', result.executer.value);    
 }
-parser.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
+ruleForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．

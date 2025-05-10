@@ -2,6 +2,17 @@
 const {ExArray} = require('./Util.js');
 const {NotImplementedError, BaseLayerError, CoreLayerError, BnfLayerError, AstLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
 
+class SelectLogic {
+    static get max() {
+        return 0;
+    }
+    static get first() {
+        return 1;
+    }
+}
+
+const globalSelectLogic = 0;
+
 class StringObject {
     #ptr;
     #endptr;
@@ -320,16 +331,19 @@ class BaseAstNode {
 
 class AbstractManager {
     #root;
-    static dump(roots, prefix = "", isLast = true) {
+    static dump(roots,  option = {}, prefix = "", isLast = true,) {
+        const arrow = option.arrow || ' -> ';
+        const omitLength = option.omitLength || 8;
+        const shortBefore = option.shortBefore || 3;
+        const shortAfter = option.shortAfter || 3;
         const connector = isLast ? "└── " : "├── ";
-        const arrow = ' -> ';
         const end = roots.slice(-1)[0];
         const fullLabels = roots.map(root => root.label);
         const labels = fullLabels.filter((l, i) => l !== fullLabels[i - 1]);
         const skips = fullLabels.map((l, i) => [l, i]).filter((li => li[0] !== fullLabels[li[1] - 1])).map(li => li[1]);
         const label = '[' + end.name + '] ' + (() => {
-            if(0 && labels.length > 8) {
-                return labels.slice(0, 3).concat(['...']).concat(labels.slice(-3)).join(arrow) 
+            if(labels.length > omitLength) {
+                return labels.slice(0, shortBefore).concat(['...']).concat(labels.slice(-shortAfter)).join(arrow) 
                        + ' (depth:' + labels.length + ')';
             }
             return labels.join(arrow);
@@ -351,7 +365,7 @@ class AbstractManager {
                 }
                 return newRoots;
             })();
-            this.dump(childTree, newPrefix, isLastChild);
+            this.dump(childTree, option, newPrefix, isLastChild);
         }
     }
     get root() {
@@ -411,8 +425,17 @@ class Evaluator {
             return this.#src;
         }
         if(this.#src instanceof AstNode) {
+            const args = this.args;
             if(this.#src.astManager.evaluators.has(this.nameHierarchy)) {
-                return this.#src.astManager.evaluators.get(this.#src.nameHierarchy)(this.args);
+                return this.#src.astManager.evaluators.get(this.#src.nameHierarchy)(args, this.str);
+            }
+            if(args instanceof Object) {
+                const keys = Object.keys(args);
+                if(keys.length === 1) {
+                    return args[keys[0]].value;
+                } else {
+                    throw new BnfLayerError("Not implemented for [" + this.#src.nameHierarchy + "] action.", NotImplementedError);
+                }
             }
             return this.str;
         } else {
@@ -699,7 +722,8 @@ class BnfAstManager extends AbstractManager {
         Object.defineProperty(space, "hasNonRecursiveTerms", {
             get: () => {
                 return space.firstTerms.length !== space.recursiveFirstTerms.length;
-            }
+            },
+            configurable: true,
         });
         return space;
     }
@@ -805,30 +829,34 @@ class BnfAstManager extends AbstractManager {
         const nameHierarchy = bnfAstNode.baseType.nameHierarchy(bnfAstNode);
         const spaces = this.#serializeNameSpace(this.getNameSpace(nameHierarchy));
         const parsers = spaces.map(space => space.syntaxParser);
+        const selectLogic = SelectLogic.max;
         const test = (strObj, index, seed) => {
             const results = parsers.map(parser => parser.test(strObj, index, seed));
-            const max = (() => {
+            const select = (() => {
                 let max = {
                     success: false,
-                    length: undefined,
+                    length: 0,
                     candidate: undefined,
                     result: undefined,
                 };
                 for(const [i, result] of results.entries()) {
                     if(!result.success) {
-                        continue
+                        continue;
                     }
-                    if((max.length === undefined) || (max.length < result.length)) {
+                    if(!max.success || (max.length < result.length)) {
                         max.success = true;
                         max.length = result.length;
                         max.space = result.space ? result.space : spaces[i];
                         max.candidate = i;
                         max.result = result;
                     }
+                    if(selectLogic === SelectLogic.first) {
+                        break;
+                    }
                 }
                 return max;
             })();
-            return max;
+            return select;
             
         };
         const process = (astNode, strObj, result, seed) => {
@@ -863,6 +891,7 @@ class BnfAstManager extends AbstractManager {
                 });
                 return {test, parse};
             },
+            configurable: true,
         });
         Object.defineProperty(nameSpace, "localSyntaxParser", {
             get: () => {
@@ -1181,22 +1210,23 @@ class BnfAstManager extends AbstractManager {
                     return leaf;
                 };
                 return {test, parse};
-            }
+            },
+            configurable: true,
         })
-        const parser = (accessor, selectLogic = 0) => {
+        const parser = (accessor, selectLogic = SelectLogic.max) => {
             const spaces = relatedSpaces.filter(space => space[accessor]);
             const test = (strObj, index, seed) => {
                 let max = {
                     success: false,
-                    length: 0,
+                    length: undefined,
                 };
                 for(const space of spaces) {
                     const parser = space[accessor];
                     const result = parser.test(strObj, index, seed);
-                    if(result.success && (max.length < result.length)) {
+                    if(result.success && (!max.success || (max.length < result.length))) {
                         max = result;
                         result.space = space;
-                        if(selectLogic === 1) {
+                        if(selectLogic === SelectLogic.first) {
                             return max;
                         }
                     }
@@ -1214,22 +1244,26 @@ class BnfAstManager extends AbstractManager {
         Object.defineProperty(nameSpace, "baseParser", {
             get: () => {
                 return parser('localBaseParser');
-            }
+            },
+            configurable: true,
         });
         Object.defineProperty(nameSpace, "recursiveParser", {
             get: () => {
                 return parser('localRecursiveParser');
-            }
+            },
+            configurable: true,
         });
         Object.defineProperty(nameSpace, "localBaseParser", {
             get: () => {
                 return baseCase;
-            }
+            },
+            configurable: true,
         });
         Object.defineProperty(nameSpace, "localRecursiveParser", {
             get: () => {
                 return recursiveCase;
-            }
+            },
+            configurable: true,
         });
     }
     #getNameSpaceByStr(entryPoint) {
@@ -2525,8 +2559,7 @@ class BnfOr extends UserGroup {
         return this.args[0];
     }
     get selectLogic() {
-        // 0: max(), 1: first(PEG)
-        return 0;
+        return SelectLogic.max;
     }
     get operator() {
         return this.args[1];
@@ -2576,7 +2609,7 @@ class BnfOr extends UserGroup {
                     if(!len.success) {
                         continue
                     }
-                    if((max.length === undefined) || (max.length < len.length)) {
+                    if((!max.success) || (max.length < len.length)) {
                         max.success = true;
                         max.length = len.length;
                         max.candidate = candidates[i];
@@ -2587,7 +2620,7 @@ class BnfOr extends UserGroup {
                         first.length = len.length;
                         first.candidate = candidates[i];
                         first.parser = parsers[i];
-                        if(this.selectLogic === 1) {
+                        if(this.selectLogic === SelectLogic.first) {
                             return first;
                         }
                     }
@@ -2615,8 +2648,7 @@ class BnfOr extends UserGroup {
 }
 class MyOr extends BnfOr {
     get selectLogic() {
-        // 0: max(), 1: first(PEG)
-        return 1;
+        return SelectLogic.first;
     }
 }
 
@@ -2651,6 +2683,7 @@ class UserTerminal extends UserGroup {
         ];
     }
     static targetString(bnfAstNode) {
+        // エスケープ文字を処理するならこの内容を修正する．
         return bnfAstNode.children[1].bnfStr;
     }
     static terminalTest(strObj, index, bnfAstNode, seed) {
@@ -2745,7 +2778,7 @@ class ParserGenerator {
             if(val instanceof Array) {
                 const map = new Map;
                 for(const ev of val) {
-                    map.set(ev.nameHierarchy, ev.action);
+                    map.set(ev.ruleName, ev.action);
                 }
                 return map;
             }
@@ -2808,10 +2841,10 @@ class ParserGenerator {
     get bnfStr() {
         return this.#bnfAstManager.root.bnfStr;
     }
-    bnfDump() {
+    dumpBnfAST() {
         this.#bnfAstManager.dump();
     }
-    dumpAbstractSyntaxTree() {
+    dumpAST() {
         this.#astManager.dump();
     }
 }
@@ -2844,8 +2877,8 @@ class Parser {
     get bnfStr() {
         return this.#parserGenerator.bnfStr;
     }
-    execute() {
-        const executer = this.parse().executer;
+    execute(program = this.#program, entryPoint = this.#entryPoint) {
+        const executer = this.parse(program, entryPoint).executer;
         return executer.value;
     }
     parse(program = this.#program, entryPoint = this.#entryPoint) {
@@ -2855,9 +2888,20 @@ class Parser {
         if(entryPoint === undefined) {
             throw new RuntimeLayerError("Undefined grammar rule.", Error);
         }
+        if(!this.#parserGenerator) {
+            throw new RuntimeLayerError("Parsing failed: no BNF grammar has been defined.", Error);
+        }
         return this.#parserGenerator.parse(program, entryPoint);
     }
-    dumpAbstractSyntaxTree() {
+    dumpProgramAST(program = this.#program, entryPoint = this.#entryPoint) {
+        const executer = this.parse(program, entryPoint).executer;
+        this.#parserGenerator.dumpAST();
+    }
+    dumpBnfAST() {
+        if(!this.#parserGenerator) {
+            throw new RuntimeLayerError("Parsing failed: no BNF grammar has been defined.", Error);
+        }
+        this.#parserGenerator.dumpBnfAST();
     }
 }
 

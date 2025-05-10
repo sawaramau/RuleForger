@@ -1,4 +1,9 @@
 "use strict"
+/*
+ * RuleForger - A parser generator for intuitive syntax and semantics
+ * Copyright (c) 2025 k.izu
+ * Licensed under the ISC License. See LICENSE file for details.
+ */
 
 class MySet extends Set {
     static toSet(set) {
@@ -73,17 +78,6 @@ class MySet extends Set {
         //console.log('self:', this.size, 'other:', set.size, 'result:', or.size === this.size);
         return or.size === this.size;
     }
-}
-
-function isSubclassOf(child, parent) {
-    if (typeof child !== 'function' || typeof parent !== 'function') return false;
-
-    let proto = child.prototype;
-    while (proto) {
-        if (proto === parent.prototype) return true;
-        proto = Object.getPrototypeOf(proto);
-    }
-    return false;
 }
 
 class BtreeKey {
@@ -535,23 +529,5 @@ class ExArray extends Array {}
 module.exports = {
     Set: MySet,
     BtreeManager,
-    isSubclassOf,
     ExArray
 };
-
-Object.defineProperty(module.exports, "String", {
-    get: () => {
-        Object.defineProperties(String.prototype, {
-            strWidth: {
-                get: function() {
-                    return (style) => {
-                        if(style === undefined) {
-                            return this.length;
-                        }
-                        return this.length;
-                    };
-                }
-            },
-        });        
-    }
-})

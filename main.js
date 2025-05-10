@@ -1,4 +1,10 @@
 "use strict"
+/*
+ * RuleForger - A parser generator for intuitive syntax and semantics
+ * Copyright (c) 2025 k.izu
+ * Licensed under the ISC License. See LICENSE file for details.
+ */
+
 const {ExArray} = require('./Util.js');
 const {NotImplementedError, BaseLayerError, CoreLayerError, BnfLayerError, AstLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
 
@@ -1712,6 +1718,9 @@ class CoreTerminalSet extends CoreTerminal {
 }
 
 class CoreNegTerminalSet extends CoreTerminalSet {
+    static char(bnfAstNode) {
+        return bnfAstNode.bnfStr;
+    }
     testBnf(strObj, index) {
         const c = strObj.read(index, 1);
         if(c === "" || this.set.has(c)) {
@@ -2240,6 +2249,7 @@ class MyRepeaterSet extends UserGroup {
                 new MyAsterisk(RightElement),
                 new MyPlus(RightElement),
                 new MyOption(RightElement),
+                new MyRepeaterSample(RightElement),
             )
         ];
     }
@@ -2429,11 +2439,11 @@ class MyRepeater extends AbstractRepeater {
                 }
                 length += result.length;
                 count++;
-                if(count >= bnfAstNode.instance.max) {
+                if(count >= bnfAstNode.baseType.max(bnfAstNode)) {
                     break;
                 }
             }
-            if(count >= bnfAstNode.instance.min) {
+            if(count >= bnfAstNode.baseType.min(bnfAstNode)) {
                 return {
                     success: true,
                     length,
@@ -2461,6 +2471,12 @@ class MyRepeater extends AbstractRepeater {
     static generateEvaluator(astNode) {
         return new Evaluator(astNode.children.map(child => child.evaluator));
     }
+    static min(bnfAstNode) {
+        return 0;
+    }
+    static max(bnfAstNode) {
+        return Infinity;
+    }
 }
 
 class MyAsterisk extends MyRepeater {
@@ -2469,10 +2485,10 @@ class MyAsterisk extends MyRepeater {
             new this.elemType, new CoreTerminal('*')
         ];
     }
-    get min() {
+    static min(bnfAstNode) {
         return 0;
     }
-    get max() {
+    static max(bnfAstNode) {
         return Infinity;
     }
 }
@@ -2483,10 +2499,10 @@ class MyPlus extends MyRepeater {
             new this.elemType, new CoreTerminal('+')
         ];
     }
-    get min() {
+    static min(bnfAstNode) {
         return 1;
     }
-    get max() {
+    static max(bnfAstNode) {
         return Infinity;
     }
 }
@@ -2497,11 +2513,30 @@ class MyOption extends MyRepeater {
             new this.elemType, new CoreTerminal('?')
         ];
     }
-    get min() {
+    static min(bnfAstNode) {
         return 0;
     }
-    get max() {
+    static max(bnfAstNode) {
         return 1;
+    }
+}
+
+class MyRepeaterSample extends MyRepeater {
+    get define() {
+        return [
+            // このサンプルだと最小値，最大値ともに1桁しか指定できない．
+            new this.elemType, new CoreTerminal('{'), new CoreWhite, new CoreTerminalSet('0123456789'), new CoreWhite, new CoreTerminal(','), new CoreWhite,new CoreTerminalSet('0123456789'),new CoreWhite, new CoreTerminal('}')
+        ];
+    }
+    static min(bnfAstNode) {
+        // digを使うとelemType内にあるCoreTerminalSetも拾う可能性があるので，全数拾って後ろから探す．
+        const min = bnfAstNode.dig(CoreTerminalSet).slice(-2)[0];
+        return Number(min.str);
+    }
+    static max(bnfAstNode) {
+        // digを使うとelemType内にあるCoreTerminalSetも拾う可能性があるので，全数拾って後ろから探す．
+        const max = bnfAstNode.dig(CoreTerminalSet).slice(-1)[0];
+        return Number(max.str);
     }
 }
 
@@ -2686,8 +2721,12 @@ class UserTerminal extends UserGroup {
         ];
     }
     static targetString(bnfAstNode) {
-        // エスケープ文字を処理するならこの内容を修正する．
-        return bnfAstNode.children[1].bnfStr;
+        let str = "";
+        for(const or of bnfAstNode.children[1].children) {
+            const charNode = or.children[0];
+            str += charNode.baseType.char(charNode);
+        }
+        return str;
     }
     static terminalTest(strObj, index, bnfAstNode, seed) {
         const str = this.targetString(bnfAstNode);
@@ -2766,6 +2805,20 @@ class UserEscape extends UserGroup {
     get define() {
         return [new CoreTerminal(this.escapeChar), new CoreTerminalDot];
     }
+    static char(bnfAstNode) {
+        const char = bnfAstNode.children[1].bnfStr;
+        const escapes = new Map;
+        escapes.set('n', '\n');
+        escapes.set('t', '\t');
+        escapes.set('v', '\v');
+        escapes.set('r', '\r');
+        escapes.set('0', '\0');
+        escapes.set('b', '\b');
+        if(escapes.has(char)) {
+            return escapes.get(char);
+        }
+        return char;
+    }
 }
 
 class ParserGenerator {
@@ -2786,13 +2839,7 @@ class ParserGenerator {
                 return map;
             }
         })();
-        const seriarizedMap = new Map;
-        for(const [hierarchy, action] of map.entries()) {
-            const nameHierarchy = hierarchy instanceof Array ? hierarchy.join(UserNonTerminal.selector) : hierarchy;
-            seriarizedMap.set(nameHierarchy, action);
-        }
-        this.#evaluators = seriarizedMap;
-        return seriarizedMap;
+        return this.#evaluators = map;
     }
     analyze(str) {
         const strObj = new StringObject(str);

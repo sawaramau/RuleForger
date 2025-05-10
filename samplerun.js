@@ -29,7 +29,7 @@ proddiv.div = $v1:proddiv white '/' white $v2:term
 
 // 非終端文字以外にも別名を与えられるが，.valueは文字列等を返却する
 // 繰り返し要素(*, +)や位置マッチ(!)に対する参照は配列やtrue/falseを返却するはず（もう忘れた）．
-term = $altName:(nonZero $digits:digits*) | $zero:'0'
+term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
 
 // ''は文字集合，""は文字列，i""は大文字小文字無視の文字列
 // 終端文字の設定はUserTerminalsを参照
@@ -99,13 +99,16 @@ const evals = [
         }
     },
 ];
-
+const mapEvals = new Map;
+for(const ev of evals) {
+    mapEvals.set(ev.ruleName, ev.action);
+}
 const ruleForger = new RuleForger;
 ruleForger.bnf = bnf;
 ruleForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
-ruleForger.evaluators = evals;
+ruleForger.evaluators = mapEvals;
 ruleForger.entryPoint = 'entrypoint';
-const programs = ["1 - 2 + 3", "2/3 * 4", "aa - 3"];
+const programs = ["1 - 2 + 3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
     ruleForger.program = prog;
     const result = ruleForger.parse();

@@ -1,6 +1,6 @@
 "use strict"
 
-class LayerError extends Error {
+class BaseLayerError extends Error {
     constructor(message, rule, name = new.target.name) {
         super(name + "." + rule.name + ":" + message);
         this.name = name;
@@ -15,28 +15,28 @@ module.exports = {
             this.name = "NotImplementedError";
         }
     },
-    LayerError,
-    CoreLayerError: class extends LayerError {
+    BaseLayerError,
+    CoreLayerError: class extends BaseLayerError {
         constructor(message, rule) {
             super(message, rule);
         }
     },
-    BnfLayerError: class extends LayerError {
+    BnfLayerError: class extends BaseLayerError {
         constructor(message, rule) {
             super(message, rule);
         }
     },
-    AstLayerError: class extends LayerError {
+    AstLayerError: class extends BaseLayerError {
         constructor(message, rule) {
             super(message, rule);
         }
     },
-    RuntimeLayerError: class extends LayerError {
+    RuntimeLayerError: class extends BaseLayerError {
         constructor(message, rule) {
             super(message, rule);
         }
     },
-    UncategorizedLayerError: class extends LayerError {
+    UncategorizedLayerError: class extends BaseLayerError {
         constructor(message, rule) {
             super(message, rule);
         }

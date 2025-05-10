@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-ISC-blue.svg)](LICENSE)
 
 > [!IMPORTANT]
-> This README was automatically generated using a Japanese version as the base, with adjustments made via generative AI. For the most accurate nuance and intent, please refer to the original Japanese version.
+> This README was automatically generated using a Japanese version as the base, with adjustments made via generative AI. For the most accurate nuance and intent, please refer to the original [Japanese version](Readme_ja.md).
 
 **RuleForger** is a parser generator designed to make linking syntax and semantics more readable and intuitive.
 

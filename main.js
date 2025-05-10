@@ -378,8 +378,9 @@ class AbstractManager {
         baseAstNode.assertUniqueTokens();
         return this.#root = baseAstNode;
     }
-    dump(roots = AbstractManager.SingleChildChain(this.root)) {
-        this.constructor.dump(roots);
+    dump(root = this.#root) {
+        const chain = AbstractManager.SingleChildChain(root);
+        this.constructor.dump(chain);
     }
 }
 

@@ -2849,7 +2849,7 @@ class ParserGenerator {
     }
 }
 
-class Parser {
+class RuleForger {
     #parserGenerator;
     #program;
     #entryPoint = 'expr';
@@ -2906,7 +2906,7 @@ class Parser {
 }
 
 module.exports = {
-    Parser,
+    RuleForger,
     AstManager,
     Evaluator,
 };

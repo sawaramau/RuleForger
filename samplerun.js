@@ -103,15 +103,23 @@ const mapEvals = new Map;
 for(const ev of evals) {
     mapEvals.set(ev.ruleName, ev.action);
 }
+const start = performance.now();
 const ruleForger = new RuleForger;
 ruleForger.bnf = bnf;
 ruleForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
+const middle = performance.now();
 ruleForger.evaluators = mapEvals;
 ruleForger.entryPoint = 'entrypoint';
 const programs = ["1 - 2 + 3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
     ruleForger.program = prog;
     const result = ruleForger.parse();
-    console.log('Result:', result.executer.value);    
+    console.log('Result:', result.executer.value);
 }
 ruleForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
+ruleForger.dumpCacheResult();
+const end = performance.now();
+
+console.log(`Execution time: ${end - start} milliseconds`);
+console.log(`Execution time: ${middle - start} milliseconds`);
+console.log(`Execution time: ${end - middle} milliseconds`);

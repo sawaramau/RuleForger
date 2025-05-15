@@ -870,6 +870,9 @@ class BnfAstManager extends AbstractManager {
     get evaluators() {
         return this.#evaluators;
     }
+    get selectLogic() {
+        return globalSelectLogic;
+    }
     newSpace(name, parent = null) {
         const space = {
             parent: parent,
@@ -985,7 +988,7 @@ class BnfAstManager extends AbstractManager {
         const nameHierarchy = bnfAstNode.baseType.nameHierarchy(bnfAstNode);
         const spaces = this.#serializeNameSpace(this.getNameSpace(nameHierarchy));
         const parsers = spaces.map(space => space.syntaxParser);
-        const selectLogic = globalSelectLogic;
+        const selectLogic = bnfAstNode.bnfAstManager.selectLogic;
         const test = (strObj, index, seed) => {
             const results = parsers.map(parser => parser.test(strObj, index, seed));
             const select = (() => {
@@ -1349,7 +1352,7 @@ class BnfAstManager extends AbstractManager {
             },
             configurable: true,
         })
-        const parser = (accessor, selectLogic = globalSelectLogic) => {
+        const parser = (accessor, selectLogic = right.bnfAstManager.selectLogic) => {
             const spaces = relatedSpaces.filter(space => space[accessor]);
             const test = (strObj, index, seed) => {
                 let max = {
@@ -2733,9 +2736,6 @@ class BnfOr extends UserGroup {
     get candidate() {
         return this.args[0];
     }
-    get selectLogic() {
-        return globalSelectLogic;
-    }
     get operator() {
         return this.args[1];
     }
@@ -2795,7 +2795,7 @@ class BnfOr extends UserGroup {
                         first.length = len.length;
                         first.candidate = candidates[i];
                         first.parser = parsers[i];
-                        if(this.selectLogic === SelectLogic.first) {
+                        if(bnfAstNode.bnfAstManager.selectLogic === SelectLogic.first) {
                             return first;
                         }
                     }
@@ -2822,9 +2822,6 @@ class BnfOr extends UserGroup {
     }
 }
 class MyOr extends BnfOr {
-    get selectLogic() {
-        return SelectLogic.first;
-    }
 }
 
 class UserTerminals extends UserGroup {

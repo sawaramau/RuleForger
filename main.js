@@ -45,7 +45,7 @@ class StringObject {
         return this.read(this.#ptr, len);
     }
     read(index = this.#ptr, len = 1) {
-        if(len > 0) {
+        if(len >= 0) {
             return this.#str.substr(index, len);
         } else {
             const start = Math.max(index + len, 0);
@@ -349,9 +349,6 @@ class BaseAstNode {
                     const cacheLine = cache.get(index);
                     if(this.cacheLineAvailable(baseAstNode, strObj, index, seed)) {
                         if(!this.cacheLineCompare(cacheLine, result)) {
-                            console.log(result);
-                            console.log(cacheLine.result);
-                            console.log(baseAstNode.baseType);
                             throw new baseAstNode.ErrorLayer(
 `[CacheIntegrityError] test output does not match cached result.
     This suggests a possible bug in:
@@ -447,6 +444,8 @@ class BaseAstNode {
         }
     }
     #depth;
+    // map: あるノードが何の子としてどの深さで呼び出されたかを覚えておく変数
+    // manageMap: あるノードが何の子として呼び出されたかを覚えておく変数
     #assertUniqueTokensBody(map = new Map, depth = 0, parent = null, manageMap = new Map) {
         this.#depth = depth;
         const set = map.get(this) || new Set;
@@ -579,8 +578,9 @@ class Evaluator {
             const args = this.args;
             if(this.#src.astManager.evaluators.has(this.nameHierarchy)) {
                 return this.#src.astManager.evaluators.get(this.#src.nameHierarchy)(args, this.str);
-            }
-            if(args instanceof Object) {
+            } else if(args instanceof Object) {
+                // evaluatorsに見つからない場合でも，keyが1つならばそれを直接実行（.value）する．
+                // （多層構造における自明な意味定義層の省略）
                 const keys = Object.keys(args);
                 if(keys.length === 1) {
                     return args[keys[0]].value;
@@ -653,6 +653,9 @@ class Evaluator {
             };
             astNode.recursive(
                 node => {
+                    if(node === astNode) {
+                        return false;
+                    }
                     if(node.anchor !== null) {
                         record(node);
                     }
@@ -669,6 +672,44 @@ class Evaluator {
     get pos() {
         if(this.#src instanceof AstNode) {
             return this.#src.pos;
+        }
+    }
+    peek(caller, instance) {
+        if(this.#src === true || this.#src === false) {
+            return this.#src;
+        }
+        if(this.#src instanceof AstNode) {
+            const args = this.args;
+            if(this.#src.astManager.peeks.has(this.nameHierarchy)) {
+                const actions = this.#src.astManager.peeks.get(this.#src.nameHierarchy);
+                if(actions.has(caller)) {
+                    actions.get(caller)(args, this.str, instance);
+                    return;
+                }
+            }
+            if(args instanceof Object) {
+                // evaluatorsに見つからない場合，子要素に再帰的に放送する．
+                const keys = Object.keys(args);
+                for(const key of keys) {
+                    args[key].peek(caller, instance);
+                }
+                return;
+            }
+            return this.str;
+        } else {
+            const obj = new ExArray;
+            for(const [i, e] of this.array.entries()) {
+                // イテレータでアクセス可能
+                obj[i] = e;
+            }
+            for(const e of this.array) {
+                const anchor = e.anchor;
+                if(anchor !== null) {
+                    // 直下の要素であれば名称でもアクセス可能(iteratorには含まれない)
+                    obj[anchor] = e;
+                }
+            }
+            return obj;
         }
     }
 }
@@ -779,11 +820,18 @@ class AstNode extends BaseAstNode {
 
 class AstManager extends AbstractManager {
     #evaluators;
+    #peeks;
     set evaluators(val) {
         return this.#evaluators = val;
     }
     get evaluators() {
         return this.#evaluators;
+    }
+    set peeks(val) {
+        return this.#peeks = val;
+    }
+    get peeks() {
+        return this.#peeks;
     }
 }
 
@@ -911,7 +959,7 @@ class BnfAstManager extends AbstractManager {
         currentSpace.argNames = argNames?.map(bnfAstNode => bnfAstNode.bnfStr);
     }
     static #Str2hierarchy(str) {
-        const nonTerminal = new UserNonTerminal();
+        const nonTerminal = UserNonTerminal.generate();
         const strObj = new StringObject(str);
         const bnfAstNode = nonTerminal.primaryParser.parse(strObj).node;
         return UserNonTerminal.nameHierarchy(bnfAstNode);
@@ -1429,6 +1477,7 @@ class BnfAstManager extends AbstractManager {
 class CoreAstNode extends BaseAstNode {
     #args;
     #define;
+    static genCount = 0;
     constructor(...args) {
         super();
         if(new.target === CoreAstNode) {
@@ -1550,13 +1599,64 @@ class CoreAstNode extends BaseAstNode {
         CoreAstNode.cacheNouse++;
         super.IncrementCacheNouse();
     }
+    static definedSet = new Set;
+    static sameDefineCount = 0;
+    static instanceManageDB = new Map;
+    static reuseable = false;
+    static instanceManager(...allArgs) {
+        const first = allArgs[0];
+        const rest = allArgs.slice(1, -1);
+        const db = ((arg) => {
+            if(arg instanceof Map) {
+                return arg;
+            }
+            rest.push(arg);
+            return this.instanceManageDB;
+        })(allArgs.slice(-1)[0]);
+        if(!db.has(first)) {
+            db.set(first, {
+                instance: null,
+                db: new Map,
+            });
+        }
+        const child = db.get(first);
+        if(!rest.length) {
+            return child;
+        }
+        return this.instanceManager(...rest, child.db);
+    }
+    static generate(...args) {
+        CoreAstNode.genCount++;
+        if(!this.reuseable) {
+            return new this(...args);
+        }
+        const manager = this.instanceManager(this, ...args);
+        if(!manager.instance) {
+            manager.instance = new this(...args);
+        } else {
+            CoreAstNode.sameDefineCount++;
+        }
+        return manager.instance;
+    }
+    toJSON() {
+        if(this.operands.length) {
+            return {
+                name: this.constructor.name,
+                operands: this.operands,
+            };
+        }
+        return {
+            name: this.constructor.name,
+            args: this.args
+        };
+    }
 }
 
 class DummyOperand extends CoreAstNode {
 }
 
-// ORで再帰する場合に使用する遅延生成器
-class LazyGenerate extends CoreAstNode {
+// 再帰する場合に使用する遅延生成器
+class LazyGenerator extends CoreAstNode {
     #class = null;
     #args = [];
     constructor(classType, ...args) {
@@ -1566,17 +1666,17 @@ class LazyGenerate extends CoreAstNode {
             this.#args.push(arg);
         }
     }
-    generate() {
+    generateOnDemand() {
         const args = this.#args.map(arg => {
-            if(arg instanceof LazyGenerate) {
-                return arg.generate();
+            if(arg instanceof LazyGenerator) {
+                return arg.generateOnDemand();
             }
             if(CoreAstNode.isSuperClassOf(arg)) {
-                return (new LazyGenerate(arg)).generate();
+                return (LazyGenerator.generate(arg)).generateOnDemand();
             }
             return arg;
         });
-        const newArg = new this.#class(...args);
+        const newArg = this.#class.generate(...args);
         newArg.parent = this.parent;
         return newArg;
     }
@@ -1593,13 +1693,14 @@ class LazyGenerate extends CoreAstNode {
         return currentClass;
     }
     testBnf(str, index) {
-        const newArg = this.generate();
+        const newArg = this.generateOnDemand();
         this.parent.lazyReplace(this, newArg);
         return newArg.testBnf(str, index);
     }
 }
 
 class CoreTerminal extends CoreAstNode {
+    static reuseable = true;
     testBnf(strObj, index) {
         const len = this.args[0].length;
         const s = strObj.read(index, len);
@@ -1613,6 +1714,9 @@ class CoreTerminal extends CoreAstNode {
             success: true,
             length: len,
         };
+    }
+    setOperands(val) {
+        super.setOperands([]);
     }
 }
 
@@ -1674,10 +1778,10 @@ class CoreNonTerminal extends CoreGroup {
     }
     get define() {
         return [
-            new Name,
-            new CoreAsterisk(
-                new CoreTerminal(UserNonTerminal.selector),
-                new Name
+            Name.generate(),
+            CoreAsterisk.generate(
+                CoreTerminal.generate(UserNonTerminal.selector),
+                Name.generate()
             )
         ];
     }
@@ -1688,20 +1792,20 @@ class CoreNonTerminal extends CoreGroup {
 
 class CoreEntryPoint extends CoreNonTerminal {
     get define() {
-        return [new CoreAsterisk(new CoreExpr)];
+        return [CoreAsterisk.generate(CoreExpr.generate())];
     }
 }
 
 class CoreExpr extends CoreNonTerminal {
     get define() {
         return [
-            new CoreOr(
-                new Assign, 
-                new CoreOr(
-                    new CoreTerminal(';'), 
-                    new CoreTerminal('\n')
+            CoreOr.generate(
+                Assign.generate(), 
+                CoreOr.generate(
+                    CoreTerminal.generate(';'), 
+                    CoreTerminal.generate('\n')
                 ), 
-                new CoreWhite
+                CoreWhite.generate()
             )
         ];
     }
@@ -1710,7 +1814,7 @@ class CoreExpr extends CoreNonTerminal {
 class CoreWhite extends CoreNonTerminal {
     get define() {
         return [
-            new CoreAsterisk(new CoreOr(new CoreComment, new CoreWhiteSpace)),
+            CoreAsterisk.generate(CoreOr.generate(CoreComment.generate(), CoreWhiteSpace.generate())),
         ];
     }
     // カッコ外かどうかを判定し，改行を除外する関数
@@ -1829,6 +1933,12 @@ class CoreWhiteSpace extends CoreTerminal {
 class CoreTerminalDot extends CoreTerminal {
     testBnf(strObj, index) {
         const c = strObj.read(index, 1);
+        if(c === "") {
+            return {
+                success: false,
+                length: undefined,
+            };
+        }
         return {
             success: true,
             length: 1,
@@ -1922,8 +2032,8 @@ class UserGroup extends AbstractGroup {
 class Assign extends UserGroup {
     get define() {
         return [
-            new AssignLeft, new CoreWhite, new CoreTerminal('='), 
-            new CoreWhite, new AssignRight, new CoreWhite, 
+            AssignLeft.generate(), CoreWhite.generate(), CoreTerminal.generate('='), 
+            CoreWhite.generate(), AssignRight.generate(), CoreWhite.generate(), 
         ];
     }
     static assign(bnfAstNode) {
@@ -1937,17 +2047,17 @@ class Assign extends UserGroup {
 class AssignLeft extends UserGroup {
     get define() {
         return [
-            new CoreWhite,
-            new UserNonTerminal, 
-            new CoreWhite,
-            new CoreOption (
-                new Parentheses(
-                    new CoreAsterisk(new CoreWhite, new Variable, new CoreWhite, new CoreTerminal(',')), 
-                    new CoreWhite, new CoreOption(new Variable),
-                    new CoreWhite,
+            CoreWhite.generate(),
+            UserNonTerminal.generate(), 
+            CoreWhite.generate(),
+            CoreOption.generate (
+                Parentheses.generate(
+                    CoreAsterisk.generate(CoreWhite.generate(), Variable.generate(), CoreWhite.generate(), CoreTerminal.generate(',')), 
+                    CoreWhite.generate(), CoreOption.generate(Variable.generate()),
+                    CoreWhite.generate(),
                 )
             ),
-            new CoreWhite,
+            CoreWhite.generate(),
         ];
     }
     static argNames(bnfAstNode) {
@@ -1966,9 +2076,10 @@ class AssignLeft extends UserGroup {
 }
 
 class AssignRight extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new BnfOr(RightValue, '|')
+            BnfOr.generate(RightValue, '|')
         ];
     }
     static getMostLeftNotNullableTerms(bnfAstNode) {
@@ -2008,12 +2119,13 @@ class AssignRight extends UserGroup {
 }
 
 class RightValue extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new CoreOption(new VariableDefault),
-            new UserPlus(
-                new MonoTerm,
-                new CoreWhite(CoreWhite.whiteExcluder),
+            CoreOption.generate(VariableDefault.generate()),
+            UserPlus.generate(
+                MonoTerm.generate(),
+                CoreWhite.generate(CoreWhite.whiteExcluder),
             ),
         ];
     }
@@ -2104,30 +2216,32 @@ class RightValue extends UserGroup {
 }
 
 class MonoTerm extends UserGroup {
+    static reuseable = true;
     static get lastTermCls() {
         return MyNegOperate;
     }
     get define() {
         return [
-            new UserOr(
-                new MonoTerm.lastTermCls,
-                new Renamer(MonoTerm.lastTermCls),
+            UserOr.generate(
+                MonoTerm.lastTermCls.generate(),
+                Renamer.generate(MonoTerm.lastTermCls),
             )
         ];
     }
 }
 
 class RightElement extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-                new CoreWhite(CoreWhite.whiteExcluder),
-                new UserOr(
-                    new UserNonTerminal,
-                    new UserTerminals,
+                CoreWhite.generate(CoreWhite.whiteExcluder),
+                UserOr.generate(
+                    UserNonTerminal.generate(),
+                    UserTerminals.generate(),
                     // AssignRight は再帰なので，遅延生成とする
-                    new LazyGenerate(Parentheses, AssignRight),
+                    LazyGenerator.generate(Parentheses, AssignRight),
                 ),
-                new CoreWhite(CoreWhite.whiteExcluder),
+                CoreWhite.generate(CoreWhite.whiteExcluder),
         ];
     }
     static valids() {
@@ -2145,13 +2259,14 @@ class RightElement extends UserGroup {
 }
 
 class Name extends UserGroup {
+    static reuseable = true;
     get define() {
         const az = "abcdefghijklmnopqrstuvwxyz";
         const AZ = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
         const digit = "0123456789";
-        const symbol = "_"
+        const symbol = "_";
         return [
-            new CoreTerminalSet(symbol, az, AZ), new CoreAsterisk(new CoreTerminalSet(symbol, az, AZ, digit))
+            CoreTerminalSet.generate(symbol, az, AZ), CoreAsterisk.generate(CoreTerminalSet.generate(symbol, az, AZ, digit))
         ];
     }
 }
@@ -2161,7 +2276,7 @@ class VarName extends Name {
 
 class Parentheses extends UserGroup {
     get define() {
-        return [new CoreTerminal('('), new CoreWhite, ...this.args, new CoreWhite, new CoreTerminal(')')];
+        return [CoreTerminal.generate('('), CoreWhite.generate(), ...this.args, CoreWhite.generate(), CoreTerminal.generate(')')];
     }
     get isEnclosure() {
         return true;
@@ -2172,10 +2287,11 @@ class Parentheses extends UserGroup {
 }
 
 class UserNonTerminal extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new Name, 
-            new CoreAsterisk(new CoreWhite, new CoreTerminal(UserNonTerminal.selector), new CoreWhite, new Name)
+            Name.generate(), 
+            CoreAsterisk.generate(CoreWhite.generate(), CoreTerminal.generate(UserNonTerminal.selector), CoreWhite.generate(), Name.generate())
         ];
     }
     static get selector() {
@@ -2224,9 +2340,9 @@ class UserNonTerminal extends UserGroup {
 class Renamer extends UserGroup {
     get define() {
         return [
-            new CoreTerminal('$'), 
-            new CoreOption(new VarName, new CoreWhite, new CoreTerminal(':'), new CoreWhite),
-            new this.args[0]
+            CoreTerminal.generate('$'), 
+            CoreOption.generate(VarName.generate(), CoreWhite.generate(), CoreTerminal.generate(':'), CoreWhite.generate()),
+            this.args[0].generate()
         ];
     }
     static get #reference() {
@@ -2256,8 +2372,9 @@ class Renamer extends UserGroup {
 }
 
 class Variable extends UserGroup {
+    static reuseable = true;
     get define() {
-        return [new CoreTerminal('$'), new VarName]
+        return [CoreTerminal.generate('$'), VarName.generate()]
     }
     static getAnchor(bnfAstNode) {
         if(bnfAstNode.children) {
@@ -2268,12 +2385,13 @@ class Variable extends UserGroup {
 }
 
 class VariableDefault extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new CoreTerminal('{'), new CoreWhite, 
-            new CoreAsterisk(new DefaultValue, new CoreWhite, new CoreTerminal(','), new CoreWhite),
-            new CoreOption(new DefaultValue, new CoreWhite), 
-            new CoreTerminal('}'), new CoreWhite, 
+            CoreTerminal.generate('{'), CoreWhite.generate(), 
+            CoreAsterisk.generate(DefaultValue.generate(), CoreWhite.generate(), CoreTerminal.generate(','), CoreWhite.generate()),
+            CoreOption.generate(DefaultValue.generate(), CoreWhite.generate()), 
+            CoreTerminal.generate('}'), CoreWhite.generate(), 
         ]
     }
     static getDefaults(bnfAstNode) {
@@ -2298,20 +2416,21 @@ class VariableDefault extends UserGroup {
 }
 
 class DefaultValue extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new CoreTerminal('$'), 
-            new CoreOption(new VarName, new CoreWhite, new CoreTerminal(':'), new CoreWhite), 
-            new UserNonTerminal, new CoreWhite, new CoreTerminal('('), new CoreWhite, 
-            new CoreTerminal('`'),
-            new CoreAsterisk(
-                new CoreOr(
-                    new CoreNegTerminalSet('`\\'), 
-                    new CoreGroup(new CoreTerminal('\\'), new CoreTerminalDot)
+            CoreTerminal.generate('$'), 
+            CoreOption.generate(VarName.generate(), CoreWhite.generate(), CoreTerminal.generate(':'), CoreWhite.generate()), 
+            UserNonTerminal.generate(), CoreWhite.generate(), CoreTerminal.generate('('), CoreWhite.generate(), 
+            CoreTerminal.generate('`'),
+            CoreAsterisk.generate(
+                CoreOr.generate(
+                    CoreNegTerminalSet.generate('`\\'), 
+                    CoreGroup.generate(CoreTerminal.generate('\\'), CoreTerminalDot.generate())
                 )
             ),
-            new CoreTerminal('`'), new CoreWhite, 
-            new CoreWhite, new CoreTerminal(')'),
+            CoreTerminal.generate('`'), CoreWhite.generate(), 
+            CoreWhite.generate(), CoreTerminal.generate(')'),
         ]
     }
     static valids() {
@@ -2335,11 +2454,12 @@ class DefaultValue extends UserGroup {
 }
 
 class MyNegOperate extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new UserOr(
-                new MyRepeaterSet,
-                new UserGroup(new CoreTerminal('!'), new MyRepeaterSet)
+            UserOr.generate(
+                MyRepeaterSet.generate(),
+                UserGroup.generate(CoreTerminal.generate('!'), MyRepeaterSet.generate())
             )
         ];
     }
@@ -2384,12 +2504,12 @@ class MyNegOperate extends UserGroup {
 class MyRepeaterSet extends UserGroup {
     get define() {
         return [
-            new UserOr(
-                new RightElement,
-                new MyAsterisk(RightElement),
-                new MyPlus(RightElement),
-                new MyOption(RightElement),
-                new MyRepeaterSample(RightElement),
+            UserOr.generate(
+                RightElement.generate(),
+                MyAsterisk.generate(RightElement),
+                MyPlus.generate(RightElement),
+                MyOption.generate(RightElement),
+                MyRepeaterSample.generate(RightElement),
             )
         ];
     }
@@ -2406,7 +2526,7 @@ class CoreRepeater extends AbstractRepeater {
     constructor(...args) {
         if(args.length > 1) {
             // generateSyntaxParserを使うため，CoreGroupではなくUserGroupを使用する．
-            args = [new UserGroup(...args)];
+            args = [UserGroup.generate(...args)];
         }
         super(...args);
     }
@@ -2476,7 +2596,7 @@ class CoreAsterisk extends CoreRepeater {
 class CoreOption extends CoreRepeater {
     constructor(...args) {
         if(args.length > 1) {
-            args = [new CoreGroup(...args)];
+            args = [CoreGroup.generate(...args)];
         }
         super(...args);
         this.min = 0;
@@ -2537,7 +2657,7 @@ class UserAsterisk extends UserRepeater {
 class UserOption extends UserRepeater {
     constructor(...args) {
         if(args.length > 1) {
-            args = [new CoreGroup(...args)];
+            args = [CoreGroup.generate(...args)];
         }
         super(...args);
         this.min = 0;
@@ -2622,7 +2742,7 @@ class MyRepeater extends AbstractRepeater {
 class MyAsterisk extends MyRepeater {
     get define() {
         return [
-            new this.elemType, new CoreTerminal('*')
+            this.elemType.generate(), CoreTerminal.generate('*')
         ];
     }
     static min(bnfAstNode) {
@@ -2636,7 +2756,7 @@ class MyAsterisk extends MyRepeater {
 class MyPlus extends MyRepeater {
     get define() {
         return [
-            new this.elemType, new CoreTerminal('+')
+            this.elemType.generate(), CoreTerminal.generate('+')
         ];
     }
     static min(bnfAstNode) {
@@ -2650,7 +2770,7 @@ class MyPlus extends MyRepeater {
 class MyOption extends MyRepeater {
     get define() {
         return [
-            new this.elemType, new CoreTerminal('?')
+            this.elemType.generate(), CoreTerminal.generate('?')
         ];
     }
     static min(bnfAstNode) {
@@ -2665,7 +2785,7 @@ class MyRepeaterSample extends MyRepeater {
     get define() {
         return [
             // このサンプルだと最小値，最大値ともに1桁しか指定できない．
-            new this.elemType, new CoreTerminal('{'), new CoreWhite, new CoreTerminalSet('0123456789'), new CoreWhite, new CoreTerminal(','), new CoreWhite,new CoreTerminalSet('0123456789'),new CoreWhite, new CoreTerminal('}')
+            this.elemType.generate(), CoreTerminal.generate('{'), CoreWhite.generate(), CoreTerminalSet.generate('0123456789'), CoreWhite.generate(), CoreTerminal.generate(','), CoreWhite.generate(),CoreTerminalSet.generate('0123456789'),CoreWhite.generate(), CoreTerminal.generate('}')
         ];
     }
     static min(bnfAstNode) {
@@ -2741,14 +2861,14 @@ class BnfOr extends UserGroup {
     }
     get define() {
         return [
-            new this.candidate,
-            new CoreWhite(CoreWhite.whiteExcluder),
-            new CoreAsterisk(
-                new CoreWhite,
-                new CoreTerminal(this.operator),
-                new CoreWhite,
-                new this.candidate, 
-                new CoreWhite(CoreWhite.whiteExcluder),
+            this.candidate.generate(),
+            CoreWhite.generate(CoreWhite.whiteExcluder),
+            CoreAsterisk.generate(
+                CoreWhite.generate(),
+                CoreTerminal.generate(this.operator),
+                CoreWhite.generate(),
+                this.candidate.generate(), 
+                CoreWhite.generate(CoreWhite.whiteExcluder),
             )
         ];
     }
@@ -2825,12 +2945,13 @@ class MyOr extends BnfOr {
 }
 
 class UserTerminals extends UserGroup {
+    static reuseable = true;
     get define() {
         return [
-            new UserOr(
-                new UserTerminal,
-                new NoCaseTerminal,
-                new MyTerminalSet,
+            UserOr.generate(
+                UserTerminal.generate(),
+                NoCaseTerminal.generate(),
+                MyTerminalSet.generate(),
             )
         ];
     }
@@ -2840,6 +2961,7 @@ class UserTerminals extends UserGroup {
 }
 
 class UserTerminal extends UserGroup {
+    static reuseable = true;
     get bracket() {
         return ['"', '"'];
     }
@@ -2847,11 +2969,11 @@ class UserTerminal extends UserGroup {
         return UserEscape;
     }
     get define() {
-        const escape = new this.escape;
+        const escape = this.escape.generate();
         return [
-            new CoreTerminal(this.bracket[0]), 
-            new CoreAsterisk(new CoreOr(new CoreNegTerminalSet(this.bracket[1], escape.escapeChar), escape)), 
-            new CoreTerminal(this.bracket[1]),
+            CoreTerminal.generate(this.bracket[0]), 
+            CoreAsterisk.generate(CoreOr.generate(CoreNegTerminalSet.generate(this.bracket[1], escape.escapeChar), escape)), 
+            CoreTerminal.generate(this.bracket[1]),
         ];
     }
     static targetString(bnfAstNode) {
@@ -2934,11 +3056,12 @@ class MyTerminalSet extends UserTerminal {
 }
 
 class UserEscape extends UserGroup {
+    static reuseable = true;
     get escapeChar() {
         return '\\';
     }
     get define() {
-        return [new CoreTerminal(this.escapeChar), new CoreTerminalDot];
+        return [CoreTerminal.generate(this.escapeChar), CoreTerminalDot.generate()];
     }
     static char(bnfAstNode) {
         const char = bnfAstNode.children[1].bnfStr;
@@ -2957,8 +3080,9 @@ class UserEscape extends UserGroup {
 }
 
 class ParserGenerator {
-    #entryPoint = new CoreEntryPoint;
+    #entryPoint = CoreEntryPoint.generate();
     #evaluators;
+    #peeks;
     #bnfAstManager;
     #astManager;
     set evaluators(val) {
@@ -2975,6 +3099,33 @@ class ParserGenerator {
             }
         })();
         return this.#evaluators = map;
+    }
+    set peeks(val) {
+        const map = (() => {
+            if(val instanceof Map) {
+                return val;
+            }
+            if(val instanceof Array) {
+                const map = new Map;
+                for(const ev of val) {
+                    if(!ev.peeks) {
+                        continue;
+                    }
+                    if(ev.peeks instanceof Map) {
+                        map.set(ev.ruleName, ev.peeks);
+                    } else {
+                        const peeks = new Map;
+                        for(const key of Object.keys(ev.peeks)) {
+                            peeks.set(key, ev.peeks[key]);
+                        }
+                        map.set(ev.ruleName, peeks);
+                    }
+                }
+                return map;
+            }
+        })();
+        return this.#peeks = map;
+
     }
     analyze(str) {
         const strObj = new StringObject(str);
@@ -3015,8 +3166,9 @@ class ParserGenerator {
         const strObj = new StringObject(str);
         this.#astManager = new AstManager;
         this.#bnfAstManager.resolveLeftRecursionsFrom(entryPoint);
-        this.#bnfAstManager.evaluators = this.#evaluators;
+        // this.#bnfAstManager.evaluators = this.#evaluators;
         this.#astManager.evaluators = this.#evaluators;
+        this.#astManager.peeks = this.#peeks || new Map;
         this.#astManager.root = this.#bnfAstManager.generateExecuter(strObj, entryPoint);
         return {
             executer: this.#astManager.root.evaluator,
@@ -3039,6 +3191,7 @@ class RuleForger {
     #program;
     #entryPoint = 'expr';
     #evaluators;
+    #peeks;
     set bnf(bnf) {
         this.#parserGenerator = new ParserGenerator;
         if(this.#evaluators) {
@@ -3052,6 +3205,13 @@ class RuleForger {
             this.#parserGenerator.evaluators = this.#evaluators;
         }
         return this.#evaluators;
+    }
+    set peeks(val) {
+        this.#peeks = val;
+        if(this.#parserGenerator) {
+            this.#parserGenerator.peeks = this.#peeks;
+        }
+        return this.#peeks;
     }
     set program(program) {
         return this.#program = program;
@@ -3096,9 +3256,10 @@ class RuleForger {
         console.log('ALL  |', BaseAstNode.baseCacheHit, BaseAstNode.baseCacheNouse, BaseAstNode.baseTestCount);
         console.log('BNF  |', BnfAstNode.cacheHit, BnfAstNode.cacheNouse, BnfAstNode.testCount);
         console.log('AST  |', AstNode.cacheHit, AstNode.cacheNouse, AstNode.testCount);
+        console.log('--------------------------------------------');
+        console.log('Gen  |', CoreAstNode.genCount, CoreAstNode.sameDefineCount);
     }
 }
-
 module.exports = {
     RuleForger,
     AstManager,

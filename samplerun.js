@@ -14,18 +14,19 @@ entrypoint = $line
 
 // ORの記述をドット演算子でも表現可能（通常の|でもOK）
 // 選択ロジックは現状最長マッチ（各所のselectLogicを1に変えればそれなりにfirst matchになると思うが，全部そうなっているかは未検討）
-line.expr = $expr; line.proddiv = $proddiv; // ワンライナーで書いたり，行末にコメントを書くなら文末記号;を省略せずに書く
+line.expr = $expr; 
+line.proddiv = $proddiv; // ワンライナーで書いたり，行末にコメントを書くなら文末記号;を省略せずに書く
 
 // name:を省略した場合，ルール名称がそのまま別名となる．
-expr = $term
 // 左再帰記述OK
-expr.add = $v1:expr white '+' white $v2:term
+expr.add = $v1:expr white "+" white $v2:expr.term
 // 定義の左側にデフォルト値を与えるような記述が可能
-expr.minus = $v1:expr white '-' white $v2:term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white
+expr.minus = $v1:expr white "-" white $v2:expr.term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white
+expr.term = $term;
 
-proddiv = $term
-proddiv.prod = $v1:proddiv white '*' white $v2:term
-proddiv.div = $v1:proddiv white '/' white $v2:term
+proddiv.prod = $v1:proddiv white "*" white $v2:proddiv.term
+proddiv.div = $v1:proddiv white "/" white $v2:proddiv.term
+proddiv.term = $term
 
 // 非終端文字以外にも別名を与えられるが，.valueは文字列等を返却する
 // 繰り返し要素(*, +)や位置マッチ(!)に対する参照は配列やtrue/falseを返却するはず（もう忘れた）．
@@ -35,8 +36,8 @@ term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
 // 終端文字の設定はUserTerminalsを参照
 // 逆スラッシュをエスケープ文字として登録しているので，'や"を終端文字として読み込むまではできるが，
 // エスケープ文字とセットでどう解釈するか，という内容をまだなにも定義していない．詳細はstatic targetStringあたりを眺める．
-digits = '0123456789'
-nonZero = '123456789'
+digits = '0456789' | "1" | "2" | "3"
+nonZero = '23456789'| "1"
 e = ''
 white = e | ' '* 
 `;
@@ -47,6 +48,10 @@ const evals = [
         action: $ => {
             // .valueで該当要素のactionの実行結果を得られる．
             // .strで該当要素の文字列を得られる．
+            const testRes = {
+                abc: 123,
+            };
+            $.line.peek("test", testRes);
             return $.line.value;
         }
     },
@@ -68,7 +73,12 @@ const evals = [
         ruleName: "expr.add",
         action: $ => {
             return $.v1.value + $.v2.value;
-        }
+        },
+        peeks: {
+            test: ($, str, testRes) => {
+                console.log('test execute', testRes.abc);
+            }
+        },
     },
     {
         ruleName: "expr.minus",
@@ -106,17 +116,20 @@ for(const ev of evals) {
 const start = performance.now();
 const ruleForger = new RuleForger;
 ruleForger.bnf = bnf;
-ruleForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
+// ruleForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
 const middle = performance.now();
-ruleForger.evaluators = mapEvals;
+ruleForger.evaluators = evals;
+ruleForger.peeks = evals;
 ruleForger.entryPoint = 'entrypoint';
-const programs = ["1 - 2 + 3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
+const programs = ["1", "1 - 5 + 3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
+    // break;
     ruleForger.program = prog;
     const result = ruleForger.parse();
     console.log('Result:', result.executer.value);
+    break;
 }
-ruleForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
+// ruleForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
 ruleForger.dumpCacheResult();
 const end = performance.now();
 

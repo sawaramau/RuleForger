@@ -127,7 +127,6 @@ for(const prog of programs) {
     ruleForger.program = prog;
     const result = ruleForger.parse();
     console.log('Result:', result.executer.value);
-    break;
 }
 // ruleForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
 ruleForger.dumpCacheResult();

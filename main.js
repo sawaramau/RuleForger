@@ -4,7 +4,7 @@
  * Copyright (c) 2025 k.izu
  * Licensed under the ISC License. See LICENSE file for details.
  */
-
+const {LexicalAnalyzer} = require('./LexicalAnalyzer.js');
 const {ExArray} = require('./Util.js');
 const {NotImplementedError, BaseLayerError, CoreLayerError, BnfLayerError, AstLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
 
@@ -193,7 +193,10 @@ class BaseAstNode {
         return this.#instance;
     }
     set parent(val) {
-        return this.#parent = val;
+        if((!this.#parent) || (this.canRewriteParent)) {
+            this.#parent = val;
+        }
+        return this.#parent;
     }
     get parent() {
         return this.#parent;
@@ -403,11 +406,14 @@ class BaseAstNode {
         };
         return ret;
     }
+    get canRewriteParent() {
+        return true;
+    }
     addChild(baseAstNode) {
         if(!this.constructor.CompareToken(this, baseAstNode)) {
             throw new this.ErrorLayer(`Incompatible instance types: parent is ${this.constructor.name}, child is ${baseAstNode.constructor.name}.`, TypeError);
         }
-        baseAstNode.#parent = this;
+        baseAstNode.parent = this;
         this.#children.push(baseAstNode);
     }
     get children() {
@@ -576,8 +582,9 @@ class Evaluator {
         }
         if(this.#src instanceof AstNode) {
             const args = this.args;
-            if(this.#src.astManager.evaluators.has(this.nameHierarchy)) {
-                return this.#src.astManager.evaluators.get(this.#src.nameHierarchy)(args, this.str);
+            const evaluate = this.#src.evaluate;
+            if(evaluate) {
+                return evaluate(args, this.str);
             } else if(args instanceof Object) {
                 // evaluatorsに見つからない場合でも，keyが1つならばそれを直接実行（.value）する．
                 // （多層構造における自明な意味定義層の省略）
@@ -585,7 +592,7 @@ class Evaluator {
                 if(keys.length === 1) {
                     return args[keys[0]].value;
                 } else {
-                    throw new BnfLayerError("Not implemented for [" + this.#src.nameHierarchy + "] action.", NotImplementedError);
+                    throw new BnfLayerError("Not implemented for [" + this.nameHierarchy + "] action.", NotImplementedError);
                 }
             }
             return this.str;
@@ -714,10 +721,12 @@ class Evaluator {
     }
 }
 
+
 class AstNode extends BaseAstNode {
     #nameHierarchy = undefined;
     #evaluator = null;
     #isBoundary = false;
+    #evaluate = undefined;
     static get newDummyNode() {
         return new this(BnfAstNode.newDummyNode);
     }
@@ -804,9 +813,6 @@ class AstNode extends BaseAstNode {
     get astManager() {
         return this.manager;
     }
-    addChild(astNode) {
-        super.addChild(astNode);
-    }
     
     static IncrementCacheHit() {
         this.cacheHit++;
@@ -815,6 +821,15 @@ class AstNode extends BaseAstNode {
     static IncrementCacheNouse() {
         this.cacheNouse++;
         super.IncrementCacheNouse();
+    }
+    get evaluate() {
+        if(!this.#evaluate && this.astManager.evaluators.has(this.nameHierarchy)) {
+            this.#evaluate = this.astManager.evaluators.get(this.nameHierarchy);
+        }
+        return this.#evaluate;
+    }
+    set evaluate(val) {
+        return this.#evaluate = val;
     }
 }
 
@@ -1497,6 +1512,12 @@ class CoreAstNode extends BaseAstNode {
     get ErrorLayer() {
         return CoreLayerError;
     }
+    get lexicalAnalyzer() {
+        if(this.parent) {
+            return this.parent.lexicalAnalyzer;
+        }
+    }
+
     static baseType() {
         return this.constructor;
     }
@@ -1590,6 +1611,9 @@ class CoreAstNode extends BaseAstNode {
     }
     get label() {
         return this.constructor.name;
+    }
+    get canRewriteParent() {
+        return false;
     }
     static IncrementCacheHit() {
         CoreAstNode.cacheHit++;
@@ -1791,8 +1815,15 @@ class CoreNonTerminal extends CoreGroup {
 }
 
 class CoreEntryPoint extends CoreNonTerminal {
+    #lexicalAnalyzer = new LexicalAnalyzer();
     get define() {
         return [CoreAsterisk.getOrCreate(CoreExpr.getOrCreate())];
+    }
+    set tokens(val) {
+        this.#lexicalAnalyzer.tokens = val;
+    }
+    get lexicalAnalyzer() {
+        return this.#lexicalAnalyzer;
     }
 }
 
@@ -2235,7 +2266,8 @@ class RightElement extends UserGroup {
     get define() {
         return [
                 CoreWhite.getOrCreate(CoreWhite.whiteExcluder),
-                UserOr.getOrCreate(
+                FirstOr.getOrCreate(
+                    Token.getOrCreate(),
                     UserNonTerminal.getOrCreate(),
                     UserTerminals.getOrCreate(),
                     // AssignRight は再帰なので，遅延生成とする
@@ -2337,6 +2369,31 @@ class UserNonTerminal extends UserGroup {
     }
 }
 
+class Token extends CoreAstNode {
+    testBnf(strObj, index) {
+        return this.lexicalAnalyzer.testBnf(strObj, index);
+    }
+    static generateSecondaryParser(bnfAstNode) {
+        const lexicalAnalyzer = bnfAstNode.instance.lexicalAnalyzer;
+        const test = (strObj, index, seed) => {
+            const result = lexicalAnalyzer.test(strObj, index, seed);
+            return result;
+        }
+        const process = (astNode, strObj, result, seed) => {
+            astNode.evaluate = ($, str) => {
+                return Number(str);
+            };
+            return lexicalAnalyzer.process(astNode, strObj, result, seed);
+        }
+        return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+    static generateEvaluator(astNode) {
+        const lexicalAnalyzer = astNode.instance.instance.lexicalAnalyzer;
+        console.log(lexicalAnalyzer);
+        return new Evaluator(astNode);
+    }
+}
+
 class Renamer extends UserGroup {
     get define() {
         return [
@@ -2357,6 +2414,10 @@ class Renamer extends UserGroup {
         const anchor = (() => {
             if(opt.count) {
                 return opt.children[0].children[0].bnfStr;
+            }
+            const token = bnfAstNode.children[this.#reference].dig(Token, true, 0, 1, new BnfLayerError("Alter name setting error.", SyntaxError))[0];
+            if(token) {
+                return token.bnfStr;
             }
             const nonTerminal = bnfAstNode.children[this.#reference].dig(UserNonTerminal, true, 1, 1, new BnfLayerError("Alter name setting error.", SyntaxError))[0];
             return UserNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(UserNonTerminal.selector);
@@ -2802,6 +2863,9 @@ class MyRepeaterSample extends MyRepeater {
 
 class CoreOr extends CoreGroup {
     #hitter = null;
+    get selectLogic() {
+        return SelectLogic.max;
+    }
     parseBnfProcess(bnfAstNode, strObj, result, seed) {
         const hitter = this.operands[result.index];
         const child = hitter.primaryParser.parse(strObj, seed);
@@ -2816,6 +2880,9 @@ class CoreOr extends CoreGroup {
             const result = arg.testBnf(strObj, index);
             if(result.success) {
                 hits.push({index:i, length: result.length});
+                if(this.selectLogic === SelectLogic.first) {
+                    break;
+                }
             }
         }
         if(hits.length === 0) {
@@ -2849,6 +2916,12 @@ class UserOr extends CoreOr {
     }
     static generateSecondaryParser(bnfAstNode) {
         return UserGroup.generateSecondaryParser.call(this, bnfAstNode);
+    }
+}
+
+class FirstOr extends UserOr {
+    get selectLogic() {
+        return SelectLogic.first;
     }
 }
 
@@ -3099,6 +3172,9 @@ class ParserGenerator {
             }
         })();
         return this.#evaluators = map;
+    }
+    set tokens(val) {
+        this.#entryPoint.tokens = val;
     }
     set peeks(val) {
         const map = (() => {

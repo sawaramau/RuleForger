@@ -30,7 +30,8 @@ proddiv.term = $term
 
 // 非終端文字以外にも別名を与えられるが，.valueは文字列等を返却する
 // 繰り返し要素(*, +)や位置マッチ(!)に対する参照は配列やtrue/falseを返却するはず（もう忘れた）．
-term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
+//term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
+term = $NUMBER
 
 // ''は文字集合，""は文字列，i""は大文字小文字無視の文字列
 // 終端文字の設定はUserTerminalsを参照
@@ -105,6 +106,7 @@ const evals = [
         action: ($, str) => {
             // $digits:digits*は繰り返し要素*にかかっているので配列として返却される．
             // console.log($.altName.value.digits.value);
+            $.NUMBER.value
             return Number(str);
         }
     },

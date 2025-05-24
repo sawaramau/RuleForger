@@ -1,4 +1,5 @@
 "use strict"
+const {ExArray} = require('./Util.js');
 const {NotImplementedError, BaseLayerError, CoreLayerError, BnfLayerError, AstLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
 
 class StringObject {

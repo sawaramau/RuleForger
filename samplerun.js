@@ -1,6 +1,6 @@
 "use strict"
 
-const {RuleForger, ModeDeck} = require("./main.js")
+const {RuleForger, ModeDeck} = require("./RuleForger.js")
 
 const modeDeck = new ModeDeck;
 const parentBnf = 

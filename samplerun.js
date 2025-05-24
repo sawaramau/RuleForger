@@ -3,6 +3,13 @@
 const {RuleForger, ModeDeck} = require("./RuleForger.js")
 
 const modeDeck = new ModeDeck;
+
+const sampleTokens = `
+NUMBER: /((+|-)[1-9]\\d*|0)/ -> int;
+PLUS: /\\+/ ~reserve;
+WHITE: /\\s*/ ~skip;
+`;
+
 const parentBnf = 
 `
 entrypoint = "start " @mode(test) " end"
@@ -23,7 +30,7 @@ line.proddiv = $proddiv; // ワンライナーで書いたり，行末にコメ�
 
 // name:を省略した場合，ルール名称がそのまま別名となる．
 // 左再帰記述OK
-expr.add = $v1:expr PLUS $v2:expr.term
+expr.add = $v1:expr '+' $v2:expr.term
 // 定義の左側にデフォルト値を与えるような記述が可能
 expr.minus = $v1:expr white "-" white $v2:expr.term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white
 expr.term = $term;
@@ -34,7 +41,7 @@ proddiv.term = $term
 callJSmode = $start:"<javascript>"  $end:"</javascript>"
 // 非終端文字以外にも別名を与えられるが，.valueは文字列等を返却する
 // 繰り返し要素(*, +)や位置マッチ(!)に対する参照は配列やtrue/falseを返却するはず（もう忘れた）．
-//term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
+// term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
 term = $NUMBER
 
 // ''は文字集合，""は文字列，i""は大文字小文字無視の文字列
@@ -124,9 +131,12 @@ const chidlForger = new RuleForger;
 const mainForger = new RuleForger;
 modeDeck.addRuleForger("main", mainForger);
 modeDeck.addRuleForger("test", chidlForger);
-mainForger.bnf = parentBnf;
+mainForger.tokens = sampleTokens;
 mainForger.entryPoint = 'entrypoint';
+chidlForger.tokens = sampleTokens;
+mainForger.bnf = parentBnf;
 chidlForger.bnf = bnf;
+// console.log(mainForger.bnfStr);
 // chidlForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
 const middle = performance.now();
 chidlForger.evaluators = evals;
@@ -137,7 +147,8 @@ for(const prog of programs) {
     // break;
     // mainForger.program = prog;
     const result = mainForger.parse("start " + prog + " end");
-    console.log(result.executer.str);
+    const result1 = chidlForger.parse(prog);
+    console.log(result1.executer.str);
     // console.log('Result:', result.executer.value);
 }
 chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
@@ -147,3 +158,4 @@ const end = performance.now();
 console.log(`Execution time: ${end - start} milliseconds`);
 console.log(`Execution time: ${middle - start} milliseconds`);
 console.log(`Execution time: ${end - middle} milliseconds`);
+console.log(chidlForger.allBnfRuleName);

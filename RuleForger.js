@@ -35,7 +35,7 @@ const {
 
 // BNFから構文解析器を作ることがメインタスクのBNF管理クラス
 class ParserGenerator {
-    #entryPoint = CoreEntryPoint.getOrCreate();
+    #entryPoint = CoreEntryPoint.getOrCreate(this);
     #bnfAstManager;
     #ruleForger = null;
     set ruleForger(val) {
@@ -50,15 +50,19 @@ class ParserGenerator {
     set tokens(val) {
         this.#entryPoint.tokens = val;
     }
+    static get Cls() {
+        const Cls = {};
+        Cls.NonTerminal = UserNonTerminal;
+        Cls.Name = Name;
+        Cls.Assign = Assign;
+        Cls.AssignRight = AssignRight;
+        Cls.AssignLeft = AssignLeft;
+        Cls.RightValue = RightValue;
+        return Cls;
+    }
     analyze(str) {
         const strObj = new StringObject(str);
-        this.#bnfAstManager = new BnfAstManager;
-        this.#bnfAstManager.Cls.NonTerminal = UserNonTerminal;
-        this.#bnfAstManager.Cls.Name = Name;
-        this.#bnfAstManager.Cls.Assign = Assign;
-        this.#bnfAstManager.Cls.AssignRight = AssignRight;
-        this.#bnfAstManager.Cls.AssignLeft = AssignLeft;
-        this.#bnfAstManager.Cls.RightValue = RightValue;
+        this.#bnfAstManager = new BnfAstManager(ParserGenerator.Cls);
         this.#bnfAstManager.parserGenerator = this;
         this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
         this.#declare();
@@ -98,12 +102,16 @@ class ParserGenerator {
     dumpBnfAST() {
         this.#bnfAstManager.dump();
     }
+    get allBnfRuleName() {
+        return this.#bnfAstManager.getAllRuleName();
+    }
 }
 
 class RuleForger {
     #modeDeck = null;
     #astManager = null;
     #name = undefined;
+    #tokens = undefined;
     #parserGenerator;
     #program;
     #entryPoint = 'expr';
@@ -127,7 +135,16 @@ class RuleForger {
         if(this.#evaluators) {
             this.#parserGenerator.evaluators = this.#evaluators;
         }
-        return this.#parserGenerator.analyze(bnf);
+        if(this.#tokens !== undefined) {
+            this.#parserGenerator.tokens = this.#tokens;
+        }
+        this.#parserGenerator.analyze(bnf);
+    }
+    set tokens(val) {
+        this.#tokens = val;
+        if(this.#parserGenerator) {
+            this.#parserGenerator.tokens = val;
+        }
     }
     set evaluators(val) {
         const map = (() => {
@@ -241,6 +258,9 @@ class RuleForger {
         console.log('AST  |', AstNode.cacheHit, AstNode.cacheNouse, AstNode.testCount);
         console.log('--------------------------------------------');
         console.log('Gen  |', CoreAstNode.genCount, CoreAstNode.sameDefineCount);
+    }
+    get allBnfRuleName() {
+        return this.#parserGenerator.allBnfRuleName;
     }
 }
 

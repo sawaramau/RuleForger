@@ -1,4 +1,10 @@
 "use strict"
+/*
+ * RuleForger - A parser generator for intuitive syntax and semantics
+ * Copyright (c) 2025 k.izu
+ * Licensed under the ISC License. See LICENSE file for details.
+ */
+
 const {ExArray} = require('./Util.js');
 const {NotImplementedError, BaseLayerError, CoreLayerError, BnfLayerError, AstLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
 
@@ -946,8 +952,18 @@ class BnfAstManager extends AbstractManager {
     #BnfClass = {};
     #nameSpace = this.#newSpace('global');
     #parserGenerator = null;
-    constructor() {
+    constructor({NonTerminal, Name, Assign, AssignRight, AssignLeft, RightValue}) {
         super();
+        this.#BnfClass.NonTerminal = NonTerminal;
+        this.#BnfClass.Name = Name;
+        this.#BnfClass.Assign = Assign;
+        this.#BnfClass.AssignRight = AssignRight;
+        this.#BnfClass.AssignLeft = AssignLeft;
+        this.#BnfClass.RightValue = RightValue;
+        const required = ['NonTerminal', 'Name', 'Assign', 'AssignRight', 'AssignLeft', 'RightValue'];
+        for (const key of required) {
+            if (!this.#BnfClass[key]) throw new BnfLayerError(`Missing required class definition: ${key}`, Error);
+        }
     }
     get Cls() {
         return this.#BnfClass;
@@ -992,7 +1008,7 @@ class BnfAstManager extends AbstractManager {
         const {
             NonTerminal,
         } = this.Cls;
-        const nonTerminal = NonTerminal.getOrCreate();
+        const nonTerminal = NonTerminal.getOrCreate(this.#parserGenerator);
         const strObj = new StringObject(str);
         const bnfAstNode = nonTerminal.primaryParser.parse(strObj).node;
         return NonTerminal.nameHierarchy(bnfAstNode);
@@ -1069,153 +1085,6 @@ class BnfAstManager extends AbstractManager {
         }
         const spaces = Array.from(set).sort(BnfAstManager.ComparePosition);
         return spaces;
-    }
-    getFullNameStr(nameSpace) {
-        const {
-            Assign,
-            AssignRight,
-            AssignLeft,
-            NonTerminal,
-            RightValue,
-        } = this.Cls;
-        const hierarchy = [];
-        const rec = space => {
-            if(space.parent) {
-                rec(space.parent);
-            }
-            hierarchy.push(space);
-        };
-        rec(nameSpace);
-        while(hierarchy.length) {
-            const space = hierarchy.shift();
-            if(space === this.#nameSpace) {
-                break;
-            }
-        }
-        return hierarchy.map(space => space.name).join(NonTerminal.selector);
-    }
-    getSecondaryParser(bnfAstNode) {
-        const {
-            NonTerminal,
-        } = this.Cls;
-        bnfAstNode.assertBaseInstanceOf(NonTerminal);
-        const space = bnfAstNode.nameSpace || this.#nameSpace;
-        const nameHierarchy = bnfAstNode.baseType.nameHierarchy(bnfAstNode);
-        const spaces = this.#serializeNameSpace(this.#getNameSpace(nameHierarchy, space));
-        const parsers = spaces.map(space => space.syntaxParser);
-        const selectLogic = bnfAstNode.bnfAstManager.selectLogic;
-        const test = (strObj, index, seed) => {
-            const results = parsers.map(parser => parser.test(strObj, index, seed));
-            const select = (() => {
-                let max = {
-                    success: false,
-                    length: 0,
-                    candidate: undefined,
-                    result: undefined,
-                };
-                for(const [i, result] of results.entries()) {
-                    if(!result.success) {
-                        continue;
-                    }
-                    if(!max.success || (max.length < result.length)) {
-                        max.success = true;
-                        max.length = result.length;
-                        max.space = result.space ? result.space : spaces[i];
-                        max.candidate = i;
-                        max.result = result;
-                    }
-                    if(selectLogic === SelectLogic.first) {
-                        break;
-                    }
-                }
-                return max;
-            })();
-            return select;
-            
-        };
-        const process = (astNode, strObj, result, seed) => {
-            const child = parsers[result.candidate].parse(strObj, seed);
-            astNode.addChild(child.node);
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
-    declare(left, rootSpace = this.#nameSpace) {
-        const {
-            NonTerminal,
-        } = this.Cls;
-        const nameHierarchy = left.nameHierarchy;
-        const argNames = left.argNames;
-        left.dig(NonTerminal, true, 1, 1)[0].nameSpace = rootSpace;
-        let currentSpace = rootSpace;
-        for(const bnfAstNode of nameHierarchy) {
-            const name = bnfAstNode.bnfStr;
-            if(!currentSpace.field.has(name)) {
-                const newSpace = this.#newSpace(name, currentSpace);
-                currentSpace.field.set(name, newSpace);
-            }
-            currentSpace = currentSpace.field.get(name);
-        }
-        currentSpace.argNames = argNames?.map(bnfAstNode => bnfAstNode.bnfStr);
-        return currentSpace;
-    }
-    assign(left, right, rootSpace = this.#nameSpace) {
-        const {
-            AssignRight,
-        } = this.Cls;
-        const hierarchy = left.nameHierarchy;
-        const nameSpace = this.#getNameSpace(hierarchy, rootSpace);
-        nameSpace.left = left;
-        nameSpace.right = right;
-        Object.defineProperty(nameSpace, "syntaxParser", {
-            get: () => {
-                // nameSpaceから該当するパーサーを呼び出す
-                const parser = nameSpace.localSyntaxParser;
-                const test = (strObj, index, seed) => {
-                    const result = parser.test(strObj, index, seed);
-                    if(!result.space) {
-                        result.space = nameSpace;
-                    }
-                    return result;
-                };
-                const parse = ((strObj, seed) => {
-                    const obj = parser.parse(strObj, seed);
-                    // 実行結果に境界線を設定することで，ルール同士の境界を外部で判断しやすくする．
-                    if(obj.node) {
-                        for(const child of obj.node.children) {
-                            child.isBoundary = true;
-                        }
-                    }
-                    return obj;
-                });
-                return {test, parse};
-            },
-            configurable: true,
-        });
-        Object.defineProperty(nameSpace, "localSyntaxParser", {
-            get: () => {
-                // assign時点では左再帰未対策のため，getterで登録する．
-                // 基本，左再帰はないものとして基底パーサを呼び出す．
-                return nameSpace.localBaseParser;
-            },
-            configurable: true,
-        });
-        // 左再帰を含まない基本的な解析ルート
-        Object.defineProperty(nameSpace, "localBaseParser", {
-            get: () => {
-                // assign時点では左再帰未対策のため，getterで登録する．
-                const syntaxParser = AssignRight.generateSecondaryParser(nameSpace.right);
-                return syntaxParser;
-            },
-            configurable: true,
-        });
-        // 左再帰を含む解析ルート
-        // 基本は存在しない．
-        Object.defineProperty(nameSpace, "localRecursiveParser", {
-            get: () => {
-                return null;
-            },
-            configurable: true,
-        });
     }
     // 左再帰に関して最大のSCC（強連結成分）を検出し，
     // SCCに含まれる要素のうちentryPointから直接到達可能なノードについて
@@ -1398,9 +1267,6 @@ class BnfAstManager extends AbstractManager {
     }
     #unrollLeftRecursion(target) {
         const {
-            Assign,
-            AssignRight,
-            AssignLeft,
             NonTerminal,
             RightValue,
         } = this.Cls;
@@ -1557,13 +1423,153 @@ class BnfAstManager extends AbstractManager {
     #toRightRecursion(target) {
         throw new NotImplementedError;
     }
+    getFullNameStr(nameSpace) {
+        const {
+            NonTerminal,
+        } = this.Cls;
+        const hierarchy = [];
+        const rec = space => {
+            if(space.parent) {
+                rec(space.parent);
+            }
+            hierarchy.push(space);
+        };
+        rec(nameSpace);
+        while(hierarchy.length) {
+            const space = hierarchy.shift();
+            if(space === this.#nameSpace) {
+                break;
+            }
+        }
+        return hierarchy.map(space => space.name).join(NonTerminal.selector);
+    }
+    getSecondaryParser(bnfAstNode) {
+        const {
+            NonTerminal,
+        } = this.Cls;
+        bnfAstNode.assertBaseInstanceOf(NonTerminal);
+        const space = bnfAstNode.nameSpace || this.#nameSpace;
+        const nameHierarchy = bnfAstNode.baseType.nameHierarchy(bnfAstNode);
+        const spaces = this.#serializeNameSpace(this.#getNameSpace(nameHierarchy, space));
+        const parsers = spaces.map(space => space.syntaxParser);
+        const selectLogic = bnfAstNode.bnfAstManager.selectLogic;
+        const test = (strObj, index, seed) => {
+            const results = parsers.map(parser => parser.test(strObj, index, seed));
+            const select = (() => {
+                let max = {
+                    success: false,
+                    length: 0,
+                    candidate: undefined,
+                    result: undefined,
+                };
+                for(const [i, result] of results.entries()) {
+                    if(!result.success) {
+                        continue;
+                    }
+                    if(!max.success || (max.length < result.length)) {
+                        max.success = true;
+                        max.length = result.length;
+                        max.space = result.space ? result.space : spaces[i];
+                        max.candidate = i;
+                        max.result = result;
+                    }
+                    if(selectLogic === SelectLogic.first) {
+                        break;
+                    }
+                }
+                return max;
+            })();
+            return select;
+            
+        };
+        const process = (astNode, strObj, result, seed) => {
+            const child = parsers[result.candidate].parse(strObj, seed);
+            astNode.addChild(child.node);
+        };
+        return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+    declare(left, rootSpace = this.#nameSpace) {
+        const {
+            NonTerminal,
+        } = this.Cls;
+        const nameHierarchy = left.nameHierarchy;
+        const argNames = left.argNames;
+        left.dig(NonTerminal, true, 1, 1)[0].nameSpace = rootSpace;
+        let currentSpace = rootSpace;
+        for(const bnfAstNode of nameHierarchy) {
+            const name = bnfAstNode.bnfStr;
+            if(!currentSpace.field.has(name)) {
+                const newSpace = this.#newSpace(name, currentSpace);
+                currentSpace.field.set(name, newSpace);
+            }
+            currentSpace = currentSpace.field.get(name);
+        }
+        currentSpace.argNames = argNames?.map(bnfAstNode => bnfAstNode.bnfStr);
+        return currentSpace;
+    }
+    assign(left, right, rootSpace = this.#nameSpace) {
+        const {
+            AssignRight,
+        } = this.Cls;
+        const hierarchy = left.nameHierarchy;
+        const nameSpace = this.#getNameSpace(hierarchy, rootSpace);
+        nameSpace.left = left;
+        nameSpace.right = right;
+        Object.defineProperty(nameSpace, "syntaxParser", {
+            get: () => {
+                // nameSpaceから該当するパーサーを呼び出す
+                const parser = nameSpace.localSyntaxParser;
+                const test = (strObj, index, seed) => {
+                    const result = parser.test(strObj, index, seed);
+                    if(!result.space) {
+                        result.space = nameSpace;
+                    }
+                    return result;
+                };
+                const parse = ((strObj, seed) => {
+                    const obj = parser.parse(strObj, seed);
+                    // 実行結果に境界線を設定することで，ルール同士の境界を外部で判断しやすくする．
+                    if(obj.node) {
+                        for(const child of obj.node.children) {
+                            child.isBoundary = true;
+                        }
+                    }
+                    return obj;
+                });
+                return {test, parse};
+            },
+            configurable: true,
+        });
+        Object.defineProperty(nameSpace, "localSyntaxParser", {
+            get: () => {
+                // assign時点では左再帰未対策のため，getterで登録する．
+                // 基本，左再帰はないものとして基底パーサを呼び出す．
+                return nameSpace.localBaseParser;
+            },
+            configurable: true,
+        });
+        // 左再帰を含まない基本的な解析ルート
+        Object.defineProperty(nameSpace, "localBaseParser", {
+            get: () => {
+                // assign時点では左再帰未対策のため，getterで登録する．
+                const syntaxParser = AssignRight.generateSecondaryParser(nameSpace.right);
+                return syntaxParser;
+            },
+            configurable: true,
+        });
+        // 左再帰を含む解析ルート
+        // 基本は存在しない．
+        Object.defineProperty(nameSpace, "localRecursiveParser", {
+            get: () => {
+                return null;
+            },
+            configurable: true,
+        });
+    }
     getParser(entryPoint = 'expr') {
         const {
             Assign,
-            AssignRight,
-            AssignLeft,
             NonTerminal,
-            RightValue,
         } = this.Cls;
         this.#resolveLeftRecursionsFrom(entryPoint);
         const systemSpace = this.#newSpace('systemSpace');
@@ -1583,14 +1589,25 @@ class BnfAstManager extends AbstractManager {
         const bnfAstNode = field.left.children.find(t => t.baseType === NonTerminal);
         return bnfAstNode.generateSecondaryParser;
     }
+    getAllRuleName(rootSpace = this.#nameSpace) {
+        const {NonTerminal} = this.Cls;
+        const names  = this.#serializeNameSpace(rootSpace)
+            .map(
+                space => space.left.nameHierarchy.map(node => node.str)
+                .join(NonTerminal.selector)
+            );
+        return names;
+    }
 }
 
 class CoreAstNode extends BaseAstNode {
     #args;
     #define;
+    #parserGenerator = null;
     static genCount = 0;
-    constructor(...args) {
+    constructor(parserGenerator, ...args) {
         super();
+        this.#parserGenerator = parserGenerator;
         if(new.target === CoreAstNode) {
             throw new CoreLayerError("abstract class", TypeError);
         }
@@ -1600,6 +1617,9 @@ class CoreAstNode extends BaseAstNode {
                 arg.parent = this;
             }
         }
+    }
+    get parserGenerator() {
+        return this.#parserGenerator;
     }
     static get newDummyNode() {
         const node = new this;
@@ -1633,9 +1653,6 @@ class CoreAstNode extends BaseAstNode {
     static get upperDummyAst() {
         return DummyOperand;
     }
-    // get upperAst() {
-    //     return new BnfAstNode(this);
-    // }
     get args() {
         return this.#args;
     }
@@ -1753,6 +1770,7 @@ class CoreAstNode extends BaseAstNode {
     }
     static getOrCreate(...args) {
         CoreAstNode.genCount++;
+        // return new this(...args);
         if(!this.reuseable) {
             return new this(...args);
         }
@@ -1782,8 +1800,8 @@ class CoreAstNode extends BaseAstNode {
 class LazyGenerator extends CoreAstNode {
     #class = null;
     #args = [];
-    constructor(classType, ...args) {
-        super();
+    constructor(parserGenerator, classType, ...args) {
+        super(parserGenerator);
         this.#class = classType;
         for(const arg of args) {
             this.#args.push(arg);
@@ -1795,11 +1813,11 @@ class LazyGenerator extends CoreAstNode {
                 return arg.generateOnDemand();
             }
             if(CoreAstNode.isSuperClassOf(arg)) {
-                return (LazyGenerator.getOrCreate(arg)).generateOnDemand();
+                return (LazyGenerator.getOrCreate(this.parserGenerator, arg)).generateOnDemand();
             }
             return arg;
         });
-        const newArg = this.#class.getOrCreate(...args);
+        const newArg = this.#class.getOrCreate(this.parserGenerator, ...args);
         newArg.parent = this.parent;
         return newArg;
     }
@@ -1859,8 +1877,8 @@ class CoreGroup extends AbstractGroup {
 class CoreNonTerminal extends CoreGroup {
     #prev;
     #post;
-    constructor(prev, post) {
-        super();
+    constructor(parserGenerator, prev, post) {
+        super(parserGenerator);
         this.#prev = prev;
         this.#post = post;
     }
@@ -1882,10 +1900,10 @@ class CoreNonTerminal extends CoreGroup {
     }
     get define() {
         return [
-            Name.getOrCreate(),
-            CoreAsterisk.getOrCreate(
-                CoreTerminal.getOrCreate(NonTerminal.selector),
-                Name.getOrCreate()
+            Name.getOrCreate(this.parserGenerator),
+            CoreAsterisk.getOrCreate(this.parserGenerator, 
+                CoreTerminal.getOrCreate(this.parserGenerator, NonTerminal.selector),
+                Name.getOrCreate(this.parserGenerator, )
             )
         ];
     }
@@ -1918,7 +1936,13 @@ class CoreTerminal extends CoreAstNode {
 class CoreWhite extends CoreNonTerminal {
     get define() {
         return [
-            CoreAsterisk.getOrCreate(CoreOr.getOrCreate(CoreComment.getOrCreate(), CoreWhiteSpace.getOrCreate())),
+            CoreAsterisk.getOrCreate(this.parserGenerator, 
+                CoreOr.getOrCreate(
+                    this.parserGenerator, 
+                    CoreComment.getOrCreate(this.parserGenerator, ), 
+                    CoreWhiteSpace.getOrCreate(this.parserGenerator, ),
+                )
+            ),
         ];
     }
     // カッコ外かどうかを判定し，改行を除外する関数
@@ -1984,8 +2008,8 @@ class CoreComment extends CoreTerminal {
 class CoreWhiteSpace extends CoreTerminal {
     #include = new Set;
     #exclude = new Set;
-    constructor(...args) {
-        super(...args);
+    constructor(parserGenerator, ...args) {
+        super(parserGenerator, ...args);
         this.include = " \n\t";
     }
     static isString(value) {
@@ -2085,12 +2109,12 @@ class CoreRepeater extends AbstractRepeater {
     #min = 0;
     #max = Infinity;
     #count;
-    constructor(...args) {
+    constructor(parserGenerator, ...args) {
         if(args.length > 1) {
             // generateSyntaxParserを使うため，CoreGroupではなくUserGroupを使用する．
-            args = [UserCoreGroup.getOrCreate(...args)];
+            args = [UserCoreGroup.getOrCreate(parserGenerator, ...args)];
         }
-        super(...args);
+        super(parserGenerator, ...args);
     }
     get Src() {
         return this.args[0];
@@ -2148,27 +2172,27 @@ class CoreRepeater extends AbstractRepeater {
 }
 
 class CoreAsterisk extends CoreRepeater {
-    constructor(...args) {
-        super(...args);
+    constructor(parserGenerator, ...args) {
+        super(parserGenerator, ...args);
         this.min = 0;
         this.max = Infinity;
     }
 }
 
 class CoreOption extends CoreRepeater {
-    constructor(...args) {
+    constructor(parserGenerator, ...args) {
         if(args.length > 1) {
-            args = [CoreGroup.getOrCreate(...args)];
+            args = [CoreGroup.getOrCreate(parserGenerator, ...args)];
         }
-        super(...args);
+        super(parserGenerator, ...args);
         this.min = 0;
         this.max = 1;
     }
 }
 
 class CorePlus extends CoreRepeater {
-    constructor(...args) {
-        super(...args);
+    constructor(parserGenerator, ...args) {
+        super(parserGenerator, ...args);
         this.min = 1;
         this.max = Infinity;
     }
@@ -2240,8 +2264,8 @@ class CoreTerminalDot extends CoreTerminal {
 }
 
 class CoreTerminalSet extends CoreTerminal {
-    constructor(...args) {
-        super(...args);
+    constructor(parserGenerator, ...args) {
+        super(parserGenerator, ...args);
         const strs = args.reduce((acc, cur) => acc + cur, "").split('');
         this.set = new Set(strs);
     }

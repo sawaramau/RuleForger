@@ -1,8 +1,12 @@
 "use strict"
 
-const {RuleForger} = require("./main.js")
+const {RuleForger, ModeDeck} = require("./main.js")
 
-
+const modeDeck = new ModeDeck;
+const parentBnf = 
+`
+entrypoint = "start " @mode(test) " end"
+`;
 const bnf = 
 `
 // コメントアウトを使用可能
@@ -19,7 +23,7 @@ line.proddiv = $proddiv; // ワンライナーで書いたり，行末にコメ�
 
 // name:を省略した場合，ルール名称がそのまま別名となる．
 // 左再帰記述OK
-expr.add = $v1:expr white "+" white $v2:expr.term
+expr.add = $v1:expr PLUS $v2:expr.term
 // 定義の左側にデフォルト値を与えるような記述が可能
 expr.minus = $v1:expr white "-" white $v2:expr.term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white
 expr.term = $term;
@@ -27,7 +31,7 @@ expr.term = $term;
 proddiv.prod = $v1:proddiv white "*" white $v2:proddiv.term
 proddiv.div = $v1:proddiv white "/" white $v2:proddiv.term
 proddiv.term = $term
-
+callJSmode = $start:"<javascript>"  $end:"</javascript>"
 // 非終端文字以外にも別名を与えられるが，.valueは文字列等を返却する
 // 繰り返し要素(*, +)や位置マッチ(!)に対する参照は配列やtrue/falseを返却するはず（もう忘れた）．
 //term = $altName:(nonZero $digits:digits{0,3}) | $zero:'0'
@@ -40,7 +44,7 @@ term = $NUMBER
 digits = '0456789' | "1" | "2" | "3"
 nonZero = '23456789'| "1"
 e = ''
-white = e | ' '* 
+white = e | ' '*
 `;
 const evals = [
     {
@@ -52,7 +56,7 @@ const evals = [
             const testRes = {
                 abc: 123,
             };
-            $.line.peek("test", testRes);
+            // $.line.peek("test", testRes);
             return $.line.value;
         }
     },
@@ -116,22 +120,28 @@ for(const ev of evals) {
     mapEvals.set(ev.ruleName, ev.action);
 }
 const start = performance.now();
-const ruleForger = new RuleForger;
-ruleForger.bnf = bnf;
-// ruleForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
+const chidlForger = new RuleForger;
+const mainForger = new RuleForger;
+modeDeck.addRuleForger("main", mainForger);
+modeDeck.addRuleForger("test", chidlForger);
+mainForger.bnf = parentBnf;
+mainForger.entryPoint = 'entrypoint';
+chidlForger.bnf = bnf;
+// chidlForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
 const middle = performance.now();
-ruleForger.evaluators = evals;
-ruleForger.peeks = evals;
-ruleForger.entryPoint = 'entrypoint';
-const programs = ["1", "1 - 5 + 3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
+chidlForger.evaluators = evals;
+chidlForger.peeks = evals;
+chidlForger.entryPoint = 'entrypoint';
+const programs = ["1", "1 - 5+3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
     // break;
-    ruleForger.program = prog;
-    const result = ruleForger.parse();
-    console.log('Result:', result.executer.value);
+    // mainForger.program = prog;
+    const result = mainForger.parse("start " + prog + " end");
+    console.log(result.executer.str);
+    // console.log('Result:', result.executer.value);
 }
-// ruleForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
-ruleForger.dumpCacheResult();
+chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
+chidlForger.dumpCacheResult();
 const end = performance.now();
 
 console.log(`Execution time: ${end - start} milliseconds`);

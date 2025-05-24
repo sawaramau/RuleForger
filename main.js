@@ -34,7 +34,11 @@ class StringObject {
     #str;
     #stacks = [];
     constructor(str) {
-        this.str = str;
+        if(str instanceof StringObject) {
+            this.str = str.str;
+        } else {
+            this.str = str;
+        }
     }
     shift(len = 1) {
         const str = this.#str.substr(this.#ptr, len);
@@ -924,19 +928,30 @@ class BnfAstNode extends BaseAstNode {
     }
 }
 
+// BNFの依存関係を解析することがメインタスクのBNF管理クラス
 class BnfAstManager extends AbstractManager {
-    #nameSpace = this.newSpace('global');
-    #evaluators;
-    set evaluators(val) {
-        return this.#evaluators = val;
+    #nameSpace;
+    #systemSpace;
+    #parserGenerator = null;
+    constructor() {
+        super();
+        this.#systemSpace = this.#newSpace('system');
+        this.#nameSpace = this.#newSpace('global', this.#systemSpace);
+        this.#systemSpace.field.set('global', this.#nameSpace);
     }
-    get evaluators() {
-        return this.#evaluators;
+    set parserGenerator(val) {
+        return this.#parserGenerator = val;
+    }
+    get ruleForger() {
+        return this.#parserGenerator.ruleForger;
+    }
+    get modeDeck() {
+        return this.#parserGenerator.modeDeck;
     }
     get selectLogic() {
         return globalSelectLogic;
     }
-    newSpace(name, parent = null) {
+    #newSpace(name, parent = null) {
         const space = {
             parent: parent,
             name: name,
@@ -961,27 +976,15 @@ class BnfAstManager extends AbstractManager {
         });
         return space;
     }
-    declare(nameHierarchy, argNames) {
-        let currentSpace = this.#nameSpace;
-        for(const bnfAstNode of nameHierarchy) {
-            const name = bnfAstNode.bnfStr;
-            if(!currentSpace.field.has(name)) {
-                const newSpace = this.newSpace(name, currentSpace);
-                currentSpace.field.set(name, newSpace);
-            }
-            currentSpace = currentSpace.field.get(name);
-        }
-        currentSpace.argNames = argNames?.map(bnfAstNode => bnfAstNode.bnfStr);
-    }
     static #Str2hierarchy(str) {
         const nonTerminal = UserNonTerminal.getOrCreate();
         const strObj = new StringObject(str);
         const bnfAstNode = nonTerminal.primaryParser.parse(strObj).node;
         return UserNonTerminal.nameHierarchy(bnfAstNode);
     }
-    getNameSpace(nameHierarchy) {
+    #getNameSpace(nameHierarchy, rootSpace = this.#nameSpace) {
         nameHierarchy.map(bnfAstNode => bnfAstNode.assertBaseInstanceOf(Name));
-        let currentSpace = this.#nameSpace;
+        let currentSpace = rootSpace;
         const declared = [];
         for(const bnfAstNode of nameHierarchy) {
             const name = bnfAstNode.bnfStr;
@@ -1000,6 +1003,17 @@ class BnfAstManager extends AbstractManager {
             currentSpace = currentSpace.field.get(name);
         }
         return currentSpace;
+    }
+    #getNameSpaceByStr(entryPoint, rootSpace = this.#nameSpace) {
+        const ep = BnfAstManager.#Str2hierarchy(entryPoint);
+        const field = (() => {
+            try {
+                return this.#getNameSpace(ep, rootSpace);
+            } catch(e) {
+                throw new BnfLayerError("Entrypoint:" + entryPoint + " is not declared.", ReferenceError);
+            }
+        })();
+        return field;
     }
     #serializeNameSpace(nameSpace) {
         const spaces = [];
@@ -1023,7 +1037,7 @@ class BnfAstManager extends AbstractManager {
     #getRelatedNameSpaces(nameSpace) {
         const recursiveSpaces = 
             nameSpace.recursiveFirstTerms.map(term => UserNonTerminal.nameHierarchy(term))
-            .map(nameHierarchy => this.getNameSpace(nameHierarchy));
+            .map(nameHierarchy => this.#getNameSpace(nameHierarchy));
         const set = new Set;
         for(const root of recursiveSpaces) {
             const spaces = this.#serializeNameSpace(root);
@@ -1040,16 +1054,22 @@ class BnfAstManager extends AbstractManager {
             if(space.parent) {
                 rec(space.parent);
             }
-            hierarchy.push(space.name);
+            hierarchy.push(space);
         };
         rec(nameSpace);
-        hierarchy.shift();
-        return hierarchy.join(UserNonTerminal.selector);
+        while(hierarchy.length) {
+            const space = hierarchy.shift();
+            if(space === this.#nameSpace) {
+                break;
+            }
+        }
+        return hierarchy.map(space => space.name).join(UserNonTerminal.selector);
     }
-    getSyntaxParser(bnfAstNode) {
+    getSecondaryParser(bnfAstNode) {
         bnfAstNode.assertBaseInstanceOf(UserNonTerminal);
+        const space = bnfAstNode.nameSpace || this.#nameSpace;
         const nameHierarchy = bnfAstNode.baseType.nameHierarchy(bnfAstNode);
-        const spaces = this.#serializeNameSpace(this.getNameSpace(nameHierarchy));
+        const spaces = this.#serializeNameSpace(this.#getNameSpace(nameHierarchy, space));
         const parsers = spaces.map(space => space.syntaxParser);
         const selectLogic = bnfAstNode.bnfAstManager.selectLogic;
         const test = (strObj, index, seed) => {
@@ -1087,9 +1107,25 @@ class BnfAstManager extends AbstractManager {
         };
         return AstNode.parserWrapper(bnfAstNode, test, process);
     }
-    assign(left, right) {
+    declare(left, rootSpace = this.#nameSpace) {
+        const nameHierarchy = AssignLeft.nameHierarchy(left);
+        const argNames = AssignLeft.argNames(left);
+        left.dig(UserNonTerminal, true, 1, 1)[0].nameSpace = rootSpace;
+        let currentSpace = rootSpace;
+        for(const bnfAstNode of nameHierarchy) {
+            const name = bnfAstNode.bnfStr;
+            if(!currentSpace.field.has(name)) {
+                const newSpace = this.#newSpace(name, currentSpace);
+                currentSpace.field.set(name, newSpace);
+            }
+            currentSpace = currentSpace.field.get(name);
+        }
+        currentSpace.argNames = argNames?.map(bnfAstNode => bnfAstNode.bnfStr);
+        return currentSpace;
+    }
+    assign(left, right, rootSpace = this.#nameSpace) {
         const hierarchy = AssignLeft.nameHierarchy(left);
-        const nameSpace = this.getNameSpace(hierarchy);
+        const nameSpace = this.#getNameSpace(hierarchy, rootSpace);
         nameSpace.left = left;
         nameSpace.right = right;
         Object.defineProperty(nameSpace, "syntaxParser", {
@@ -1142,7 +1178,6 @@ class BnfAstManager extends AbstractManager {
             },
             configurable: true,
         });
-        // nameSpace.hierarchy = hierarchy;
     }
     // 左再帰に関して最大のSCC（強連結成分）を検出し，
     // SCCに含まれる要素のうちentryPointから直接到達可能なノードについて
@@ -1181,12 +1216,12 @@ class BnfAstManager extends AbstractManager {
             };
             this.root.recursive(stopper, process, 1);
             for(const [hierarchy, [firstHierarchies, allHierarchies, firstTerms]] of map) {
-                const nameSpace = this.getNameSpace(hierarchy);
+                const nameSpace = this.#getNameSpace(hierarchy);
                 nameSpace.firstHierarchies = firstHierarchies;
                 nameSpace.firstTerms = firstTerms;
                 nameSpace.allHierarchies = allHierarchies;
                 for(const revHierarchy of allHierarchies) {
-                    const s = this.getNameSpace(revHierarchy);
+                    const s = this.#getNameSpace(revHierarchy);
                     const spaces = this.#serializeNameSpace(s);
                     for(const space of spaces) {
                         space.reverseHierarchies.push(hierarchy);
@@ -1203,7 +1238,7 @@ class BnfAstManager extends AbstractManager {
                 for(const nameSpace of scc) {
                     const hitTerms = nameSpace.firstTerms.filter(term => {
                         const hierarchy = UserNonTerminal.nameHierarchy(term);
-                        const spaces = new Set(this.#serializeNameSpace(this.getNameSpace(hierarchy)));
+                        const spaces = new Set(this.#serializeNameSpace(this.#getNameSpace(hierarchy)));
                         return spaces.intersection(scc).size;
                     });
                     map.set(nameSpace, hitTerms);
@@ -1255,7 +1290,7 @@ class BnfAstManager extends AbstractManager {
                 };
                 const getChildren = nameSpace => {
                     const hierarchies = nameSpace.firstHierarchies;
-                    const children = hierarchies.map(h => this.getNameSpace(h))
+                    const children = hierarchies.map(h => this.#getNameSpace(h))
                     .reduce((acc, space) => {
                         for(const s of this.#serializeNameSpace(space)) {
                             acc.push(s);
@@ -1274,7 +1309,7 @@ class BnfAstManager extends AbstractManager {
         {
             const getChildren = nameSpace => {
                 const hierarchies = nameSpace.reverseHierarchies;
-                const children = hierarchies.map(h => this.getNameSpace(h))
+                const children = hierarchies.map(h => this.#getNameSpace(h))
                 .reduce((acc, space) => {
                     for(const s of this.#serializeNameSpace(space)) {
                         acc.push(s);
@@ -1471,21 +1506,21 @@ class BnfAstManager extends AbstractManager {
     #toRightRecursion(target) {
         throw new NotImplementedError;
     }
-    #getNameSpaceByStr(entryPoint) {
-        const ep = BnfAstManager.#Str2hierarchy(entryPoint);
-        const field = (() => {
-            try {
-                return this.getNameSpace(ep);
-            } catch(e) {
-                throw new BnfLayerError("Entrypoint:" + entryPoint + " is not declared.", ReferenceError);
-            }
-        })();
-        return field;
-    }
-    generateExecuter(strObj, entryPoint = 'expr') {
-        const field = this.#getNameSpaceByStr(entryPoint);
+    getParser(entryPoint = 'expr') {
+        {
+            const assignRule = new Assign;
+            const lstr = "";
+            const rstr = "";
+            const tmpStrObj = new StringObject("ep = $" + entryPoint);
+            const bnfAstNode = assignRule.primaryParser.parse(tmpStrObj).node;
+            const [left, right] = Assign.assign(bnfAstNode);
+            this.declare(left, this.#systemSpace);
+            this.assign(left, right, this.#systemSpace);
+            bnfAstNode.setManager(this);
+        }
+        const field = this.#getNameSpaceByStr("ep", this.#systemSpace);
         const bnfAstNode = field.left.children.find(t => t.baseType === UserNonTerminal);
-        return bnfAstNode.generateSecondaryParser.parse(strObj).node;
+        return bnfAstNode.generateSecondaryParser;
     }
 }
 
@@ -2061,9 +2096,12 @@ class UserGroup extends AbstractGroup {
 }
 
 class Assign extends UserGroup {
+    static get operator() {
+        return '=';
+    }
     get define() {
         return [
-            AssignLeft.getOrCreate(), CoreWhite.getOrCreate(), CoreTerminal.getOrCreate('='), 
+            AssignLeft.getOrCreate(), CoreWhite.getOrCreate(), CoreTerminal.getOrCreate(Assign.operator), 
             CoreWhite.getOrCreate(), AssignRight.getOrCreate(), CoreWhite.getOrCreate(), 
         ];
     }
@@ -2072,6 +2110,12 @@ class Assign extends UserGroup {
         const left = bnfAstNode.children.find(t => t.baseType === AssignLeft);
         const right = bnfAstNode.children.find(t => t.baseType === AssignRight);
         return [left, right];
+    }
+    static systemAssign(leftStr, rightBnfs, manager, systemSpace) {
+        let str = leftStr;
+        for(const right of rightBnfs) {
+            
+        }
     }
 }
 
@@ -2155,7 +2199,10 @@ class RightValue extends UserGroup {
         return [
             CoreOption.getOrCreate(VariableDefault.getOrCreate()),
             UserPlus.getOrCreate(
-                MonoTerm.getOrCreate(),
+                UserOr.getOrCreate(
+                    MonoTerm.getOrCreate(),
+                    Commands.getOrCreate(),
+                ),
                 CoreWhite.getOrCreate(CoreWhite.whiteExcluder),
             ),
         ];
@@ -2213,6 +2260,10 @@ class RightValue extends UserGroup {
             }
         };
         for(const child of notNullables) {
+            const mono = child.dig(MonoTerm);
+            if(mono.length === 0) {
+                continue;
+            }
             search(child);
             break;
         }
@@ -2240,9 +2291,127 @@ class RightValue extends UserGroup {
             }
         };
         for(const child of children) {
+            const mono = child.dig(MonoTerm);
+            if(mono.length === 0) {
+                continue;
+            }
             search(child);
         }
         return result;
+    }
+}
+
+class Argument extends UserGroup {
+    static reuseable = true;
+    get define() {
+        return [
+            CoreOr.getOrCreate(
+                Name.getOrCreate(),
+                NumberTerminal.getOrCreate(),
+            ),
+        ];
+    }
+}
+
+class Arguments extends UserGroup {
+    static reuseable = true;
+    get define() {
+        return [
+            UserAsterisk.getOrCreate(
+                Argument.getOrCreate(),
+                CoreWhite.getOrCreate(CoreWhite.whiteExcluder),
+                CoreTerminal.getOrCreate(','),
+                CoreWhite.getOrCreate(CoreWhite.whiteExcluder),
+            ),
+            UserOption.getOrCreate(
+                Argument.getOrCreate(),
+                CoreWhite.getOrCreate(CoreWhite.whiteExcluder),
+                UserOption.getOrCreate(
+                    CoreTerminal.getOrCreate(','),
+                    CoreWhite.getOrCreate(CoreWhite.whiteExcluder)
+                ),
+            ),
+        ];
+    }
+
+}
+
+class BaseCommander extends UserGroup {
+    static reuseable = true;
+    static get command() {
+        return "";
+    }
+    get define() {
+        return [
+            // コマンドはBNF上で静的に表現する．
+            // 動的（最終コード上での）表現を許容すると字句解析や構文解析表の事前定義が不可能になる．
+            CoreTerminal.getOrCreate('@'),
+            CoreTerminal.getOrCreate(this.constructor.command),
+            UserOption.getOrCreate(
+                Parentheses.getOrCreate(Arguments.getOrCreate())
+            )
+        ];
+    }
+    static generateSecondaryParser(bnfAstNode) {
+        bnfAstNode.assertBaseInstanceOf(this);
+        const test = (strObj, index, seed) => {
+            // 通常，コマンドは文字列を食べない．
+            // 食べる場合は別途定義する．
+            return {success: true, length: 0};
+        };
+        return AstNode.parserWrapper(bnfAstNode, test);
+    }
+    static getArguments(bnfAstNode) {
+        const args = bnfAstNode.dig(Argument);
+        return args;
+    }
+}
+
+class ModeSwitcher extends BaseCommander {
+    static get command() {
+        return "mode";
+    }
+    static generateSecondaryParser(bnfAstNode) {
+        bnfAstNode.assertBaseInstanceOf(this);
+        const args = this.getArguments(bnfAstNode);
+        const modeName = args[0]?.bnfStr;
+        const entryPoint = args[1]?.bnfStr;
+        if(modeName === undefined) {
+            throw new BnfLayerError("Mode name is missing in mode-switch directive.", SyntaxError);
+        }
+        const mode = bnfAstNode.bnfAstManager.modeDeck.get(modeName);
+        if(mode === undefined) {
+            throw new BnfLayerError(`Mode not found: no rule set registered for mode < ${modeName}>.`, SyntaxError);
+        }
+        const switchedParser = mode.parser(entryPoint);
+        const astManager = new AstManager;
+        astManager.evaluators = mode.evaluators || new Map;
+        astManager.peeks = mode.peeks || new Map;
+        const test = (strObj, index, seed) => {
+            return switchedParser.test(strObj, index, seed);
+        };
+        const process = (astNode, strObj, result, seed) => {
+            // RuleForger毎にStringObjectを新規に作ってあげないと文字の位置を正しく取得できない．
+            const newStrObj = new StringObject(strObj);
+            const parsed = switchedParser.parse(newStrObj);
+            strObj.shift(parsed.node.str.length);
+            astNode.length = parsed.node.str.length;
+            astManager.root = parsed.node;
+            // TODO:モードスイッチ後の結果の扱いは要検討
+            const val = astManager.root.evaluator.value;
+        };
+        return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+}
+
+class Commands extends UserGroup {
+    static reuseable = true;
+    get define() {
+        return [
+            UserOr.getOrCreate(
+                ModeSwitcher.getOrCreate(),
+            )
+        ];
     }
 }
 
@@ -2306,6 +2475,25 @@ class Name extends UserGroup {
 class VarName extends Name {
 }
 
+class NumberTerminal extends UserGroup {
+    static reuseable = true;
+    get define() {
+        return [
+            CoreOr.getOrCreate(
+                CorePlus.getOrCreate(
+                    CoreTerminalSet.getOrCreate('0123456789'), 
+                ),
+                UserGroup.getOrCreate(
+                    CoreTerminal.getOrCreate("0x"),
+                    CorePlus.getOrCreate(
+                        CoreTerminalSet.getOrCreate('0123456789abcdefABCDEF'), 
+                    ),
+                ),
+            ),
+        ];
+    }
+}
+
 class Parentheses extends UserGroup {
     get define() {
         return [CoreTerminal.getOrCreate('('), CoreWhite.getOrCreate(), ...this.args, CoreWhite.getOrCreate(), CoreTerminal.getOrCreate(')')];
@@ -2334,7 +2522,7 @@ class UserNonTerminal extends UserGroup {
         return bnfAstNode.dig(Name);
     }
     static generateSecondaryParser(bnfAstNode) {
-        const parser = bnfAstNode.bnfAstManager.getSyntaxParser(bnfAstNode);
+        const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
         const test = (strObj, index, seed = null) => {
             if(!bnfAstNode.isRecursive || !seed) {
                 const result = parser.test(strObj, index, seed);
@@ -2376,21 +2564,16 @@ class Token extends CoreAstNode {
     static generateSecondaryParser(bnfAstNode) {
         const lexicalAnalyzer = bnfAstNode.instance.lexicalAnalyzer;
         const test = (strObj, index, seed) => {
-            const result = lexicalAnalyzer.test(strObj, index, seed);
+            const result = lexicalAnalyzer.test(bnfAstNode, strObj, index, seed);
             return result;
         }
         const process = (astNode, strObj, result, seed) => {
             astNode.evaluate = ($, str) => {
                 return Number(str);
             };
-            return lexicalAnalyzer.process(astNode, strObj, result, seed);
+            return lexicalAnalyzer.process(bnfAstNode, astNode, strObj, result, seed);
         }
         return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
-    static generateEvaluator(astNode) {
-        const lexicalAnalyzer = astNode.instance.instance.lexicalAnalyzer;
-        console.log(lexicalAnalyzer);
-        return new Evaluator(astNode);
     }
 }
 
@@ -3028,9 +3211,6 @@ class UserTerminals extends UserGroup {
             )
         ];
     }
-    static valids() {
-        return [0]
-    }
 }
 
 class UserTerminal extends UserGroup {
@@ -3152,12 +3332,97 @@ class UserEscape extends UserGroup {
     }
 }
 
+// BNFから構文解析器を作ることがメインタスクのBNF管理クラス
 class ParserGenerator {
     #entryPoint = CoreEntryPoint.getOrCreate();
+    #bnfAstManager;
+    #ruleForger = null;
+    set ruleForger(val) {
+        return this.#ruleForger = val;
+    }
+    get ruleForger() {
+        return this.#ruleForger;
+    }
+    get modeDeck() {
+        return this.#ruleForger.modeDeck;
+    }
+    set tokens(val) {
+        this.#entryPoint.tokens = val;
+    }
+    analyze(str) {
+        const strObj = new StringObject(str);
+        this.#bnfAstManager = new BnfAstManager;
+        this.#bnfAstManager.parserGenerator = this;
+        this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
+        this.#declare();
+        this.#assign();
+    }
+    #declare() {
+        const stopper = bnfAstNode => {
+            if(bnfAstNode.baseType === AssignLeft) {
+                return bnfAstNode;
+            }
+            return false;
+        };
+        const process = bnfAstNode => {
+            this.#bnfAstManager.declare(bnfAstNode);
+        };
+        this.#bnfAstManager.root.recursive(stopper, process, 1);
+    }
+    #assign() {
+        const stopper = bnfAstNode => {
+            if(bnfAstNode.baseType === Assign) {
+                return bnfAstNode;
+            }
+            return false;
+        };
+        const process = bnfAstNode => {
+            const [left, right] = Assign.assign(bnfAstNode);
+            this.#bnfAstManager.assign(left, right);
+        };
+        this.#bnfAstManager.root.recursive(stopper, process, 1);
+    }
+    getSyntaxParser(entryPoint = 'expr') {
+        this.#bnfAstManager.resolveLeftRecursionsFrom(entryPoint);
+        return this.#bnfAstManager.getParser(entryPoint);
+    }
+    get bnfStr() {
+        return this.#bnfAstManager.root.bnfStr;
+    }
+    dumpBnfAST() {
+        this.#bnfAstManager.dump();
+    }
+}
+
+class RuleForger {
+    #modeDeck = null;
+    #astManager = null;
+    #name = undefined;
+    #parserGenerator;
+    #program;
+    #entryPoint = 'expr';
     #evaluators;
     #peeks;
-    #bnfAstManager;
-    #astManager;
+    set modeDeck(val) {
+        return this.#modeDeck = val;
+    }
+    set name(val) {
+        return this.#name = val;
+    }
+    get name() {
+        return this.#name;
+    }
+    get modeDeck() {
+        return this.#modeDeck;
+    }
+    set bnf(bnf) {
+        this.#parserGenerator = new ParserGenerator;
+        this.#parserGenerator.ruleForger = this;
+        if(this.#evaluators) {
+            this.#parserGenerator.evaluators = this.#evaluators;
+        }
+        return this.#parserGenerator.analyze(bnf);
+    }
     set evaluators(val) {
         const map = (() => {
             if(val instanceof Map) {
@@ -3171,10 +3436,11 @@ class ParserGenerator {
                 return map;
             }
         })();
-        return this.#evaluators = map;
+        this.#evaluators = map;
+        return this.#evaluators;
     }
-    set tokens(val) {
-        this.#entryPoint.tokens = val;
+    get evaluators() {
+        return this.#evaluators;
     }
     set peeks(val) {
         const map = (() => {
@@ -3200,93 +3466,10 @@ class ParserGenerator {
                 return map;
             }
         })();
-        return this.#peeks = map;
-
+        this.#peeks = map;
+        return this.#peeks;
     }
-    analyze(str) {
-        const strObj = new StringObject(str);
-        this.#bnfAstManager = new BnfAstManager;
-        this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
-        this.#declare();
-        this.#assign();
-    }
-    #declare() {
-        const stopper = bnfAstNode => {
-            if(bnfAstNode.baseType === AssignLeft) {
-                return bnfAstNode;
-            }
-            return false;
-        };
-        const process = bnfAstNode => {
-            const hierarchy = AssignLeft.nameHierarchy(bnfAstNode);
-            const argNames = AssignLeft.argNames(bnfAstNode);
-            this.#bnfAstManager.declare(hierarchy, argNames);
-        };
-        this.#bnfAstManager.root.recursive(stopper, process, 1);
-    }
-    #assign() {
-        const stopper = bnfAstNode => {
-            if(bnfAstNode.baseType === Assign) {
-                return bnfAstNode;
-            }
-            return false;
-        };
-        const process = bnfAstNode => {
-            const [left, right] = Assign.assign(bnfAstNode);
-            this.#bnfAstManager.assign(left, right);
-        };
-        this.#bnfAstManager.root.recursive(stopper, process, 1);
-    }
-    
-    parse(str, entryPoint = 'expr') {
-        const strObj = new StringObject(str);
-        this.#astManager = new AstManager;
-        this.#bnfAstManager.resolveLeftRecursionsFrom(entryPoint);
-        // this.#bnfAstManager.evaluators = this.#evaluators;
-        this.#astManager.evaluators = this.#evaluators;
-        this.#astManager.peeks = this.#peeks || new Map;
-        this.#astManager.root = this.#bnfAstManager.generateExecuter(strObj, entryPoint);
-        return {
-            executer: this.#astManager.root.evaluator,
-            abstractSyntaxTree: this.#astManager.root,
-        };
-    }
-    get bnfStr() {
-        return this.#bnfAstManager.root.bnfStr;
-    }
-    dumpBnfAST() {
-        this.#bnfAstManager.dump();
-    }
-    dumpAST() {
-        this.#astManager.dump();
-    }
-}
-
-class RuleForger {
-    #parserGenerator;
-    #program;
-    #entryPoint = 'expr';
-    #evaluators;
-    #peeks;
-    set bnf(bnf) {
-        this.#parserGenerator = new ParserGenerator;
-        if(this.#evaluators) {
-            this.#parserGenerator.evaluators = this.#evaluators;
-        }
-        return this.#parserGenerator.analyze(bnf);
-    }
-    set evaluators(val) {
-        this.#evaluators = val;
-        if(this.#parserGenerator) {
-            this.#parserGenerator.evaluators = this.#evaluators;
-        }
-        return this.#evaluators;
-    }
-    set peeks(val) {
-        this.#peeks = val;
-        if(this.#parserGenerator) {
-            this.#parserGenerator.peeks = this.#peeks;
-        }
+    get peeks() {
         return this.#peeks;
     }
     set program(program) {
@@ -3302,23 +3485,41 @@ class RuleForger {
         const executer = this.parse(program, entryPoint).executer;
         return executer.value;
     }
+    parser(entryPoint = this.#entryPoint) {
+        {
+            if(entryPoint === undefined) {
+                throw new RuntimeLayerError("Undefined grammar rule.", Error);
+            }
+            if(!this.#parserGenerator) {
+                throw new RuntimeLayerError("Parsing failed: no BNF grammar has been defined.", Error);
+            }    
+        }
+        return this.#parserGenerator.getSyntaxParser(entryPoint)
+    }
     parse(program = this.#program, entryPoint = this.#entryPoint) {
         if(program === undefined) {
             throw new RuntimeLayerError("No input provided for parsing.", Error);
         }
-        if(entryPoint === undefined) {
-            throw new RuntimeLayerError("Undefined grammar rule.", Error);
+        const strObj = new StringObject(program);
+        const parser = this.parser(entryPoint);
+        const result = parser.test(strObj, strObj.ptr);
+        if(!result.success) {
+            throw new AstLayerError("Cannot pass test for " + this.name + " rule.", SyntaxError);
         }
-        if(!this.#parserGenerator) {
-            throw new RuntimeLayerError("Parsing failed: no BNF grammar has been defined.", Error);
-        }
-        return this.#parserGenerator.parse(program, entryPoint);
+        this.#astManager = new AstManager;
+        this.#astManager.evaluators = this.#evaluators || new Map;
+        this.#astManager.peeks = this.#peeks || new Map;
+        this.#astManager.root = parser.parse(strObj).node;
+        return {
+            executer: this.#astManager.root.evaluator,
+            abstractSyntaxTree: this.#astManager.root,
+        };
     }
     dumpProgramAST(program, entryPoint = this.#entryPoint) {
         if(program) {
-            this.parse(program, entryPoint).parse();
+            this.parse(program, entryPoint);
         }
-        this.#parserGenerator.dumpAST();
+        this.#astManager?.dump();
     }
     dumpBnfAST() {
         if(!this.#parserGenerator) {
@@ -3336,8 +3537,21 @@ class RuleForger {
         console.log('Gen  |', CoreAstNode.genCount, CoreAstNode.sameDefineCount);
     }
 }
+
+class ModeDeck {
+    #ruleForgers = new Map;
+    addRuleForger(name, ruleForger) {
+        ruleForger.modeDeck = this;
+        ruleForger.name = name;
+        this.#ruleForgers.set(name, ruleForger);
+        return ruleForger;
+    }
+    get(name) {
+        return this.#ruleForgers.get(name);
+    }
+}
+
 module.exports = {
     RuleForger,
-    AstManager,
-    Evaluator,
+    ModeDeck,
 };

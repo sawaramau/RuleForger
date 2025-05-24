@@ -14,14 +14,52 @@ class LexicalAnalyzer {
                 length: str.length,
             };
         }
+        const plus = strObj.read(index, 4);
+        if(plus === "PLUS") {
+            return {
+                success: true,
+                length: plus.length,
+            };
+        }
+        const white = strObj.read(index, 5);
+        if(white === "WHITE") {
+            return {
+                success: true,
+                length: white.length,
+            };
+        }
         return {
             success: false,
         };
     }
-    test(strObj, index, seed) {
+    ignoreTest(strObj, index, seed) {
+        const whites = new Set(" \t\n".split(''));
+        let length = 0;
+        while(1) {
+            const c = strObj.read(index + length, 1);
+            if(!whites.has(c)) {
+                break;
+            }
+            length++;
+        }
+        return {
+            success: true,
+            length
+        };
+    }
+    test(bnfAstNode, strObj, index, seed) {
+        const ignoreResult = this.ignoreTest(strObj, index, seed);
+        if(ignoreResult.length) {
+            if(bnfAstNode.bnfStr === "WHITE") {
+                return ignoreResult;
+            }
+        }
+        if(bnfAstNode.bnfStr === "PLUS") {
+            // bnfAstNode.manager.dump(bnfAstNode.parent.parent.parent.parent.parent.parent.parent.parent.parent.parent.parent.parent);
+        }
         const digits = new Set("0123456789".split(''));
         const first = strObj.read(index, 1);
-        if(first === "0") {
+        if(first === "0" || first === '+') {
             return {
                 success: true,
                 length: 1,
@@ -46,7 +84,7 @@ class LexicalAnalyzer {
             length: length
         };
     }
-    process (astNode, strObj, result, seed) {
+    process (bnfAstNode, astNode, strObj, result, seed) {
         strObj.shift(result.length);
         astNode.length = result.length;
     };

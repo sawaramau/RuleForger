@@ -884,9 +884,6 @@ class BnfAstNode extends BaseAstNode {
     static get upperDummyAst() {
         return AstNode;
     }
-    // get upperAst() {
-    //     return new AstNode(this);
-    // }
     get generateSecondaryParser() {
         return this.baseType.generateSecondaryParser(this);
     }
@@ -1566,26 +1563,24 @@ class BnfAstManager extends AbstractManager {
             configurable: true,
         });
     }
-    getParser(entryPoint = 'expr') {
+    getParser(entryPoint = 'expr', withSystemScope = undefined, resolveRelfRecursion = false) {
         const {
             Assign,
             NonTerminal,
         } = this.Cls;
-        this.#resolveLeftRecursionsFrom(entryPoint);
-        const systemSpace = this.#newSpace('systemSpace');
-        {
-            systemSpace.field.set('userSpace', this.#nameSpace);
-            const assignRule = new Assign;
-            const lstr = "";
-            const rstr = "";
-            const tmpStrObj = new StringObject("ep = $" + entryPoint);
-            const bnfAstNode = assignRule.primaryParser.parse(tmpStrObj).node;
-            const [left, right] = Assign.assign(bnfAstNode);
-            this.declare(left, systemSpace);
-            this.assign(left, right, systemSpace);
-            bnfAstNode.setManager(this);
+        if(resolveRelfRecursion) {
+            this.#resolveLeftRecursionsFrom(entryPoint);
         }
-        const field = this.#getNameSpaceByStr("ep", systemSpace);
+        const field = (() => {
+            if(!withSystemScope) {
+                return this.#getNameSpaceByStr(entryPoint);
+            }
+            const systemSpace = this.#newSpace('systemSpace');
+            systemSpace.field.set('userSpace', this.#nameSpace);
+            const newEntryPointName = withSystemScope(systemSpace);
+            const field = this.#getNameSpaceByStr(newEntryPointName, systemSpace);
+            return field;
+        })();
         const bnfAstNode = field.left.children.find(t => t.baseType === NonTerminal);
         return bnfAstNode.generateSecondaryParser;
     }
@@ -1597,6 +1592,14 @@ class BnfAstManager extends AbstractManager {
                 .join(NonTerminal.selector)
             );
         return names;
+    }
+    declareAndAssignFromLeftRightStr(leftStr, rightStr, nameSpace) {
+        const Assign = this.Cls.Assign;
+        const bnfAstNode = Assign.generateAssignFromLeftRightStr(leftStr, rightStr);
+        const [left, right] = Assign.assign(bnfAstNode);
+        this.declare(left, nameSpace);
+        this.assign(left, right, nameSpace);
+        bnfAstNode.setManager(this);
     }
 }
 
@@ -1781,6 +1784,9 @@ class CoreAstNode extends BaseAstNode {
             CoreAstNode.sameDefineCount++;
         }
         return manager.instance;
+    }
+    createOrGet(cls, ...args) {
+        cls.getOrCreate(this.parserGenerator, ...args);
     }
     toJSON() {
         if(this.operands.length) {

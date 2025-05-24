@@ -94,7 +94,13 @@ class ParserGenerator {
         this.#bnfAstManager.root.recursive(stopper, process, 1);
     }
     getSyntaxParser(entryPoint = 'expr') {
-        return this.#bnfAstManager.getParser(entryPoint);
+        const manager = this.#bnfAstManager;
+        return manager.getParser(entryPoint, (systemSpace) => {
+            const newEp = "ep";
+            const rightStr = "$" + entryPoint;
+            manager.declareAndAssignFromLeftRightStr(newEp, rightStr, systemSpace);
+            return newEp;
+        }, true);
     }
     get bnfStr() {
         return this.#bnfAstManager.root.bnfStr;
@@ -128,6 +134,10 @@ class RuleForger {
     }
     get modeDeck() {
         return this.#modeDeck;
+    }
+    setSyntax(bnf, token) {
+        this.#tokens = token;
+        this.bnf = bnf;
     }
     set bnf(bnf) {
         this.#parserGenerator = new ParserGenerator;

@@ -83,6 +83,12 @@ class Assign extends UserCoreGroup {
         const right = bnfAstNode.children.find(t => t.baseType === AssignRight);
         return [left, right];
     }
+    static generateAssignFromLeftRightStr(left, right) {
+        const strObj = new StringObject(left + this.operator + right);
+        const assignRule = new Assign;
+        const bnfAstNode = assignRule.primaryParser.parse(strObj).node;
+        return bnfAstNode;
+    }
 }
 
 class AssignLeft extends UserCoreGroup {
@@ -292,10 +298,6 @@ class Arguments extends UserCoreGroup {
             UserOption.getOrCreate(this.parserGenerator, 
                 Argument.getOrCreate(this.parserGenerator, ),
                 CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
-                UserOption.getOrCreate(this.parserGenerator, 
-                    CoreTerminal.getOrCreate(this.parserGenerator, ','),
-                    CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder)
-                ),
             ),
         ];
     }
@@ -553,15 +555,29 @@ class Token extends CoreAstNode {
     }
     static generateSecondaryParser(bnfAstNode) {
         const lexicalAnalyzer = bnfAstNode.instance.lexicalAnalyzer;
+        const strObjMemory = new Map;
+        const getStrObj = (strObj, index = strObj.ptr) => {
+            if(!strObjMemory.has(strObj)) {
+                const strObjCache = new Map;
+                strObjMemory.set(strObj, strObjCache);
+            }
+            const strObjCache = strObjMemory.get(strObj);
+            if(!strObjCache.has(index)) {
+                const newStrObj = new StringObject(strObj.read(index));
+                strObjCache.set(index, newStrObj);
+            }
+            return strObjCache.get(index);
+        }
         const test = (strObj, index, seed) => {
-            const result = lexicalAnalyzer.test(bnfAstNode, strObj, index, seed);
+            const newStrObj = getStrObj(strObj, index);
+            const result = lexicalAnalyzer.test(bnfAstNode, newStrObj, 0, seed);
             return result;
         }
         const process = (astNode, strObj, result, seed) => {
-            astNode.evaluate = ($, str) => {
-                return Number(str);
-            };
-            return lexicalAnalyzer.process(bnfAstNode, astNode, strObj, result, seed);
+            const newStrObj = getStrObj(strObj, strObj.ptr);
+            lexicalAnalyzer.process(bnfAstNode, astNode, newStrObj, result, seed);
+            strObj.shift(result.length);
+            astNode.length = result.length;
         }
         return AstNode.parserWrapper(bnfAstNode, test, process);
     }

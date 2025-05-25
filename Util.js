@@ -69,13 +69,11 @@ class MySet extends Set {
     isSub(set) {
         set = MySet.toSet(set);
         const or = this.or(set);
-        //console.log('self:', this.size, 'other:', set.size, 'result:', or.size === set.size);
         return or.size === set.size;
     }
     isSuper(set){
         set = MySet.toSet(set);
         const or = this.or(set);
-        //console.log('self:', this.size, 'other:', set.size, 'result:', or.size === this.size);
         return or.size === this.size;
     }
 }

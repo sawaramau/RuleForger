@@ -15,7 +15,7 @@ const {
 } = require('./common.js');
 const {
     CoreEntryPoint,
-    UserNonTerminal,
+    MyNonTerminal,
     Name,
     Assign,
     AssignRight,
@@ -33,11 +33,22 @@ const {
     UncategorizedLayerError
 } = require('./Error.js');
 
-// BNFから構文解析器を作ることがメインタスクのBNF管理クラス
+class MyBnfAstManager extends BnfAstManager {
+    get ruleForger() {
+        return this.parserGenerator.ruleForger;
+    }
+    get modeDeck() {
+        return this.parserGenerator.modeDeck;
+    }
+}
+// BnfAstManagerから構文解析器を作るための機能を抽出したクラス
 class ParserGenerator {
     #entryPoint = CoreEntryPoint.getOrCreate(this);
     #bnfAstManager;
     #ruleForger = null;
+    get lexicalAnalyzer() {
+        return this.#entryPoint.lexicalAnalyzer;
+    }
     set ruleForger(val) {
         return this.#ruleForger = val;
     }
@@ -47,12 +58,12 @@ class ParserGenerator {
     get modeDeck() {
         return this.#ruleForger.modeDeck;
     }
-    set tokens(val) {
-        this.#entryPoint.tokens = val;
+    set token(val) {
+        this.#entryPoint.token = val;
     }
     static get Cls() {
         const Cls = {};
-        Cls.NonTerminal = UserNonTerminal;
+        Cls.NonTerminal = MyNonTerminal;
         Cls.Name = Name;
         Cls.Assign = Assign;
         Cls.AssignRight = AssignRight;
@@ -62,42 +73,17 @@ class ParserGenerator {
     }
     analyze(str) {
         const strObj = new StringObject(str);
-        this.#bnfAstManager = new BnfAstManager(ParserGenerator.Cls);
+        this.#bnfAstManager = new MyBnfAstManager(ParserGenerator.Cls);
         this.#bnfAstManager.parserGenerator = this;
         this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
-        this.#declare();
-        this.#assign();
-    }
-    #declare() {
-        const stopper = bnfAstNode => {
-            if(bnfAstNode.baseType === AssignLeft) {
-                return bnfAstNode;
-            }
-            return false;
-        };
-        const process = bnfAstNode => {
-            this.#bnfAstManager.declare(bnfAstNode);
-        };
-        this.#bnfAstManager.root.recursive(stopper, process, 1);
-    }
-    #assign() {
-        const stopper = bnfAstNode => {
-            if(bnfAstNode.baseType === Assign) {
-                return bnfAstNode;
-            }
-            return false;
-        };
-        const process = bnfAstNode => {
-            const [left, right] = Assign.assign(bnfAstNode);
-            this.#bnfAstManager.assign(left, right);
-        };
-        this.#bnfAstManager.root.recursive(stopper, process, 1);
     }
     getSyntaxParser(entryPoint = 'expr') {
         const manager = this.#bnfAstManager;
+        const lexicalAnalyzer = this.#entryPoint.lexicalAnalyzer;
+        const ignores = Array.from(lexicalAnalyzer.ignoredTokens).join(" ");
         return manager.getParser(entryPoint, (systemSpace) => {
             const newEp = "ep";
-            const rightStr = "$" + entryPoint;
+            const rightStr = "$" + entryPoint + " " + ignores;
             manager.declareAndAssignFromLeftRightStr(newEp, rightStr, systemSpace);
             return newEp;
         }, true);
@@ -117,12 +103,15 @@ class RuleForger {
     #modeDeck = null;
     #astManager = null;
     #name = undefined;
-    #tokens = undefined;
+    #token = undefined;
     #parserGenerator;
     #program;
     #entryPoint = 'expr';
     #evaluators;
     #peeks;
+    get debugLevel() {
+        return 1;
+    }
     set modeDeck(val) {
         return this.#modeDeck = val;
     }
@@ -136,7 +125,7 @@ class RuleForger {
         return this.#modeDeck;
     }
     setSyntax(bnf, token) {
-        this.#tokens = token;
+        this.#token = token;
         this.bnf = bnf;
     }
     set bnf(bnf) {
@@ -145,15 +134,15 @@ class RuleForger {
         if(this.#evaluators) {
             this.#parserGenerator.evaluators = this.#evaluators;
         }
-        if(this.#tokens !== undefined) {
-            this.#parserGenerator.tokens = this.#tokens;
+        if(this.#token !== undefined) {
+            this.#parserGenerator.token = this.#token;
         }
         this.#parserGenerator.analyze(bnf);
     }
-    set tokens(val) {
-        this.#tokens = val;
+    set token(val) {
+        this.#token = val;
         if(this.#parserGenerator) {
-            this.#parserGenerator.tokens = val;
+            this.#parserGenerator.token = val;
         }
     }
     set evaluators(val) {

@@ -5,14 +5,14 @@ const {RuleForger, ModeDeck} = require("./RuleForger.js")
 const modeDeck = new ModeDeck;
 
 const sampleTokens = `
-NUMBER: /((+|-)[1-9]\\d*|0)/ -> int;
-PLUS: /\\+/ ~reserve;
-WHITE: /\\s*/ ~skip;
+NUMBER: /((\\\\+|-)?[1-9][0-9]*|0)/ !reserve -> int
+PLUS: /\\\\+/ ~reserve
+WHITE: /\\\\s*/ ~skip
 `;
 
 const parentBnf = 
 `
-entrypoint = "start " @mode(test) " end"
+entrypoint = "start " $a:@mode(test) ":end"
 `;
 const bnf = 
 `
@@ -30,7 +30,7 @@ line.proddiv = $proddiv; // ワンライナーで書いたり，行末にコメ�
 
 // name:を省略した場合，ルール名称がそのまま別名となる．
 // 左再帰記述OK
-expr.add = $v1:expr '+' $v2:expr.term
+expr.add = $v1:expr PLUS $v2:expr.term
 // 定義の左側にデフォルト値を与えるような記述が可能
 expr.minus = $v1:expr white "-" white $v2:expr.term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white
 expr.term = $term;
@@ -116,9 +116,8 @@ const evals = [
         // actionの第2引数はこのルールにマッチした文字列全体
         action: ($, str) => {
             // $digits:digits*は繰り返し要素*にかかっているので配列として返却される．
-            // console.log($.altName.value.digits.value);
-            $.NUMBER.value
-            return Number(str);
+            // NUMBERを字句解析の方で数値変換しているのでここで加工する必要はもうない．
+            return $.NUMBER.value;
         }
     },
 ];
@@ -131,31 +130,20 @@ const chidlForger = new RuleForger;
 const mainForger = new RuleForger;
 modeDeck.addRuleForger("main", mainForger);
 modeDeck.addRuleForger("test", chidlForger);
-mainForger.tokens = sampleTokens;
-mainForger.entryPoint = 'entrypoint';
-chidlForger.tokens = sampleTokens;
-mainForger.bnf = parentBnf;
-chidlForger.bnf = bnf;
-// console.log(mainForger.bnfStr);
+mainForger.setSyntax(parentBnf);
+chidlForger.setSyntax(bnf, sampleTokens);
 // chidlForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
 const middle = performance.now();
 chidlForger.evaluators = evals;
 chidlForger.peeks = evals;
+mainForger.entryPoint = 'entrypoint';
 chidlForger.entryPoint = 'entrypoint';
-const programs = ["1", "1 - 5+3", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
+const programs = ["1", "1 - 5+ 9", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
-    // break;
-    // mainForger.program = prog;
-    const result = mainForger.parse("start " + prog + " end");
+    const result = mainForger.parse("start " + prog + "  :end");
     const result1 = chidlForger.parse(prog);
-    console.log(result1.executer.str);
-    // console.log('Result:', result.executer.value);
+    console.log('Result:', result.executer.value);
 }
 chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
 chidlForger.dumpCacheResult();
 const end = performance.now();
-
-console.log(`Execution time: ${end - start} milliseconds`);
-console.log(`Execution time: ${middle - start} milliseconds`);
-console.log(`Execution time: ${end - middle} milliseconds`);
-console.log(chidlForger.allBnfRuleName);

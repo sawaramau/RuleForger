@@ -28,31 +28,36 @@ const {
     CorePlus,
     UserCoreGroup,
     CoreOr,
+    UserRepeater,
+    UserAsterisk,
+    UserOption,
+    UserPlus,
+    UserOr,
+    FirstOr,
+    UserTerminal,
+    UserEscape,
 } = require('./common.js');
 const {
     LexicalAnalyzer
 } = require('./LexicalAnalyzer.js');
 const {NotImplementedError, CoreLayerError, BnfLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
 
-class CoreEntryPoint extends CoreNonTerminal {
+class CoreEntryPoint extends CoreGroup {
     // BNF読む時点ではBnfAstManager等はいないので，
     // エントリポイント自体でLexicalAnalyzerを持つ．（= RuleForger毎にLexicalAnalyzerを持っている）
-    #lexicalAnalyzer = new LexicalAnalyzer();
     get define() {
         return [CoreAsterisk.getOrCreate(this.parserGenerator, CoreExpr.getOrCreate(this.parserGenerator, ))];
     }
-    set tokens(val) {
-        this.#lexicalAnalyzer.tokens = val;
-    }
-    get lexicalAnalyzer() {
-        return this.#lexicalAnalyzer;
+    set token(val) {
+        this.lexicalAnalyzer.token = val;
     }
     constructor(parserGenerator) {
         super(parserGenerator);
+        this.lexicalAnalyzer = new LexicalAnalyzer();
     }
 }
 
-class CoreExpr extends CoreNonTerminal {
+class CoreExpr extends CoreGroup {
     get define() {
         return [
             CoreOr.getOrCreate(this.parserGenerator, 
@@ -83,9 +88,12 @@ class Assign extends UserCoreGroup {
         const right = bnfAstNode.children.find(t => t.baseType === AssignRight);
         return [left, right];
     }
-    static generateAssignFromLeftRightStr(left, right) {
+    static generateAssignFromLeftRightStr(left, right, parserGenerator) {
         const strObj = new StringObject(left + this.operator + right);
-        const assignRule = new Assign;
+        const assignRule = Assign.getOrCreate(parserGenerator);
+        if(!assignRule.lexicalAnalyzer) {
+            assignRule.lexicalAnalyzer = parserGenerator.lexicalAnalyzer;
+        }
         const bnfAstNode = assignRule.primaryParser.parse(strObj).node;
         return bnfAstNode;
     }
@@ -95,7 +103,7 @@ class AssignLeft extends UserCoreGroup {
     get define() {
         return [
             CoreWhite.getOrCreate(this.parserGenerator, ),
-            UserNonTerminal.getOrCreate(this.parserGenerator, ), 
+            MyNonTerminal.getOrCreate(this.parserGenerator, ), 
             CoreWhite.getOrCreate(this.parserGenerator, ),
             CoreOption.getOrCreate(this.parserGenerator, 
                 Parentheses.getOrCreate(this.parserGenerator, 
@@ -117,8 +125,8 @@ class AssignLeft extends UserCoreGroup {
     }
     static nameHierarchy(bnfAstNode) {
         bnfAstNode.assertBaseInstanceOf(this);
-        const hierarchies = bnfAstNode.dig(UserNonTerminal, true, 1, 1);
-        return UserNonTerminal.nameHierarchy(hierarchies[0]);
+        const hierarchies = bnfAstNode.dig(MyNonTerminal, true, 1, 1);
+        return MyNonTerminal.nameHierarchy(hierarchies[0]);
     }
 }
 
@@ -174,6 +182,7 @@ class RightValue extends UserCoreGroup {
                 UserOr.getOrCreate(this.parserGenerator, 
                     MonoTerm.getOrCreate(this.parserGenerator, ),
                     Commands.getOrCreate(this.parserGenerator, ),
+                    Renamer.getOrCreate(this.parserGenerator, Commands),
                 ),
                 CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
             ),
@@ -381,12 +390,17 @@ class ModeSwitcher extends BaseCommander {
             // switchedParserは元のstrObjを食べないので，strObjを手動で進める．
             strObj.shift(parsed.node.str.length);
             astNode.length = parsed.node.str.length;
-            // TODO:モードスイッチ後の結果の扱いは要検討
             astManager.root = parsed.node;
-            const val = astManager.root.evaluator.value;
-            console.log(val);
+            // モードスイッチ後の結果取得は管理クラス等の縁切りを確実に行うため
+            // evaluatorsを経由せずevaluateを直接定義する．
+            astNode.evaluate = ($, str) => {
+                return astManager.root.evaluator.value;;
+            };
         };
         return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+    static generateEvaluator(astNode) {
+        return new Evaluator(astNode);
     }
 }
 
@@ -423,8 +437,8 @@ class RightElement extends UserCoreGroup {
                 CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
                 FirstOr.getOrCreate(this.parserGenerator, 
                     Token.getOrCreate(this.parserGenerator, ),
-                    UserNonTerminal.getOrCreate(this.parserGenerator, ),
-                    UserTerminals.getOrCreate(this.parserGenerator, ),
+                    MyNonTerminal.getOrCreate(this.parserGenerator, ),
+                    MyTerminals.getOrCreate(this.parserGenerator, ),
                     // AssignRight は再帰なので，遅延生成とする
                     LazyGenerator.getOrCreate(this.parserGenerator, Parentheses, AssignRight),
                 ),
@@ -492,12 +506,12 @@ class Parentheses extends UserCoreGroup {
     }
 }
 
-class UserNonTerminal extends UserCoreGroup {
+class MyNonTerminal extends UserCoreGroup {
     static reuseable = true;
     get define() {
         return [
             Name.getOrCreate(this.parserGenerator, ), 
-            CoreAsterisk.getOrCreate(this.parserGenerator, CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, UserNonTerminal.selector), CoreWhite.getOrCreate(this.parserGenerator, ), Name.getOrCreate(this.parserGenerator, ))
+            CoreAsterisk.getOrCreate(this.parserGenerator, CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, MyNonTerminal.selector), CoreWhite.getOrCreate(this.parserGenerator, ), Name.getOrCreate(this.parserGenerator, ))
         ];
     }
     static get selector() {
@@ -604,12 +618,12 @@ class Renamer extends UserCoreGroup {
             if(opt.count) {
                 return opt.children[0].children[0].bnfStr;
             }
-            const token = bnfAstNode.children[this.#reference].dig(Token, true, 0, 1, new BnfLayerError("Alter name setting error.", SyntaxError))[0];
+            const token = bnfAstNode.children[this.#reference].dig(Token, true, 0, 1, "Alter name setting error.", SyntaxError)[0];
             if(token) {
                 return token.bnfStr;
             }
-            const nonTerminal = bnfAstNode.children[this.#reference].dig(UserNonTerminal, true, 1, 1, new BnfLayerError("Alter name setting error.", SyntaxError))[0];
-            return UserNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(UserNonTerminal.selector);
+            const nonTerminal = bnfAstNode.children[this.#reference].dig(MyNonTerminal, true, 1, 1, "Alter name setting error.", SyntaxError)[0];
+            return MyNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(MyNonTerminal.selector);
         })();
         const newProcess = (astNode, strObj, result, seed) => {
             parser.process(astNode, strObj, result, seed);
@@ -671,7 +685,7 @@ class DefaultValue extends UserCoreGroup {
         return [
             CoreTerminal.getOrCreate(this.parserGenerator, '$'), 
             CoreOption.getOrCreate(this.parserGenerator, VarName.getOrCreate(this.parserGenerator, ), CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, ':'), CoreWhite.getOrCreate(this.parserGenerator, )), 
-            UserNonTerminal.getOrCreate(this.parserGenerator, ), CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, '('), CoreWhite.getOrCreate(this.parserGenerator, ), 
+            MyNonTerminal.getOrCreate(this.parserGenerator, ), CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, '('), CoreWhite.getOrCreate(this.parserGenerator, ), 
             CoreTerminal.getOrCreate(this.parserGenerator, '`'),
             CoreAsterisk.getOrCreate(this.parserGenerator, 
                 CoreOr.getOrCreate(this.parserGenerator, 
@@ -689,9 +703,9 @@ class DefaultValue extends UserCoreGroup {
     static getDefault(bnfAstNode) {
         bnfAstNode.assertBaseInstanceOf(this);
         const opt = bnfAstNode.children.find(c => c.baseType === CoreOption);
-        const nonTerminal = bnfAstNode.children.find(c => c.baseType === UserNonTerminal);
+        const nonTerminal = bnfAstNode.children.find(c => c.baseType === MyNonTerminal);
         const ast = bnfAstNode.children.find(c => c.baseType === CoreAsterisk);
-        const nonTermName = UserNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(UserNonTerminal.selector);
+        const nonTermName = MyNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(MyNonTerminal.selector);
         const anchor = (() => {
             if(opt.count) {
                 return opt.children[0].children[0].bnfStr;
@@ -762,67 +776,6 @@ class MyRepeaterSet extends UserCoreGroup {
                 MyRepeaterSample.getOrCreate(this.parserGenerator, RightElement),
             )
         ];
-    }
-}
-
-class UserRepeater extends CoreRepeater {
-    static generateSecondaryParser(bnfAstNode) {
-        if(bnfAstNode.instance.args[0]?.constructor === UserCoreGroup) {
-            for(const t of bnfAstNode.children) {
-                t.valids = bnfAstNode.valids;
-            }
-        }
-        const test = (strObj, index, seed) => {
-            let length = 0;
-            for(const bnfAstChild of bnfAstNode.children) {
-                const result = bnfAstChild.generateSecondaryParser.test(strObj, index + length, seed);
-                if(!result.success) {
-                    return {
-                        success: false,
-                        length: undefined,
-                    };
-                }
-                length += result.length;
-            }
-            return {
-                success: true,
-                length: length,
-            };
-        };
-        const process = (astNode, strObj, result, seed) => {
-            for(const bnfAstChild of bnfAstNode.children) {
-                const child = bnfAstChild.generateSecondaryParser.parse(strObj, seed);
-                astNode.addChild(child.node);
-            }
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
-}
-
-class UserAsterisk extends UserRepeater {
-    constructor(parserGenerator, ...args) {
-        super(parserGenerator, ...args);
-        this.min = 0;
-        this.max = Infinity;
-    }
-}
-
-class UserOption extends UserRepeater {
-    constructor(parserGenerator, ...args) {
-        if(args.length > 1) {
-            args = [CoreGroup.getOrCreate(parserGenerator, ...args)];
-        }
-        super(parserGenerator, ...args);
-        this.min = 0;
-        this.max = 1;
-    }
-}
-
-class UserPlus extends UserRepeater {
-    constructor(parserGenerator, ...args) {
-        super(parserGenerator, ...args);
-        this.min = 1;
-        this.max = Infinity;
     }
 }
 
@@ -953,22 +906,6 @@ class MyRepeaterSample extends MyRepeater {
     }
 }
 
-class UserOr extends CoreOr {
-    static valids(bnfAstNode) {
-        // Or要素がbnfTokensとして返す要素は1つだけなので，有効な要素のインデックスは必ず0
-        return [0];
-    }
-    static generateSecondaryParser(bnfAstNode) {
-        return UserCoreGroup.generateSecondaryParser.call(this, bnfAstNode);
-    }
-}
-
-class FirstOr extends UserOr {
-    get selectLogic() {
-        return SelectLogic.first;
-    }
-}
-
 class BnfOr extends UserCoreGroup {
     get candidate() {
         return this.args[0];
@@ -1061,7 +998,7 @@ class BnfOr extends UserCoreGroup {
 class MyOr extends BnfOr {
 }
 
-class UserTerminals extends UserCoreGroup {
+class MyTerminals extends UserCoreGroup {
     static reuseable = true;
     get define() {
         return [
@@ -1071,58 +1008,6 @@ class UserTerminals extends UserCoreGroup {
                 MyTerminalSet.getOrCreate(this.parserGenerator, ),
             )
         ];
-    }
-}
-
-class UserTerminal extends UserCoreGroup {
-    static reuseable = true;
-    get bracket() {
-        return ['"', '"'];
-    }
-    get escape() {
-        return UserEscape;
-    }
-    get define() {
-        const escape = this.escape.getOrCreate(this.parserGenerator, );
-        return [
-            CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[0]), 
-            CoreAsterisk.getOrCreate(this.parserGenerator, CoreOr.getOrCreate(this.parserGenerator, CoreNegTerminalSet.getOrCreate(this.parserGenerator, this.bracket[1], escape.escapeChar), escape)), 
-            CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[1]),
-        ];
-    }
-    static targetString(bnfAstNode) {
-        let str = "";
-        for(const or of bnfAstNode.children[1].children) {
-            const charNode = or.children[0];
-            str += charNode.baseType.char(charNode);
-        }
-        return str;
-    }
-    static terminalTest(strObj, index, bnfAstNode, seed) {
-        const str = this.targetString(bnfAstNode);
-        const start = index;
-        const target = strObj.read(start, str.length);
-        if(str === target) {
-            return {
-                success: true,
-                length: str.length
-            };
-        }
-        return {
-            success: false,
-            length: undefined
-        }
-    }
-    static generateSecondaryParser(bnfAstNode) {
-        const test = (strObj, index, seed) => this.terminalTest(strObj, index, bnfAstNode, seed);
-        const process = (astNode, strObj, result, seed) => {
-            strObj.shift(result.length);
-            astNode.length = result.length;
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
-    static generateEvaluator(astNode) {
-        return new Evaluator(astNode);
     }
 }
 
@@ -1169,33 +1054,9 @@ class MyTerminalSet extends UserTerminal {
     }
 }
 
-class UserEscape extends UserCoreGroup {
-    static reuseable = true;
-    get escapeChar() {
-        return '\\';
-    }
-    get define() {
-        return [CoreTerminal.getOrCreate(this.parserGenerator, this.escapeChar), CoreTerminalDot.getOrCreate(this.parserGenerator, )];
-    }
-    static char(bnfAstNode) {
-        const char = bnfAstNode.children[1].bnfStr;
-        const escapes = new Map;
-        escapes.set('n', '\n');
-        escapes.set('t', '\t');
-        escapes.set('v', '\v');
-        escapes.set('r', '\r');
-        escapes.set('0', '\0');
-        escapes.set('b', '\b');
-        if(escapes.has(char)) {
-            return escapes.get(char);
-        }
-        return char;
-    }
-}
-
 module.exports = {
     CoreEntryPoint,
-    UserNonTerminal,
+    MyNonTerminal,
     Name,
     Assign,
     AssignRight,

@@ -244,22 +244,31 @@ class BaseAstNode {
     static IncrementCacheNouse() {
         BaseAstNode.baseCacheNouse++;
     }
-    dig(cls, type = true, min = undefined, max = undefined, error = undefined) {
+    dig(cls, type = true, min = undefined, max = undefined, errorMes = undefined, errorType = undefined) {
         const array = [];
         const stopper = baseAstNode => this.constructor.isSubClassOf(baseAstNode.baseType, cls) ? baseAstNode : false;
         const process = baseAstNode => array.push(baseAstNode);
         this.recursive(stopper, process, type);
         if(min !== undefined && max !== undefined) {
             if((array.length < min) || (array.length > max)) {
-                throw error || new this.ErrorLayer(`Expected between ${min} and ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
+                if(errorMes !== undefined) {
+                    throw new this.ErrorLayer(errorMes, errorType);
+                }
+                throw new this.ErrorLayer(`Expected between ${min} and ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
             }
         } else if(min !== undefined) {
             if(array.length < min) {
-                throw error || new this.ErrorLayer(`Expected at least ${min} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
+                if(errorMes !== undefined) {
+                    throw new this.ErrorLayer(errorMes, errorType);
+                }
+                throw new this.ErrorLayer(`Expected at least ${min} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
             }
         } else if(max !== undefined) {
             if(array.length > max) {
-                throw error || new this.ErrorLayer(`Expected at most ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
+                if(errorMes !== undefined) {
+                    throw new this.ErrorLayer(errorMes, errorType);
+                }
+                throw new this.ErrorLayer(`Expected at most ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
             }
         }
         return array;
@@ -741,22 +750,31 @@ class AstNode extends BaseAstNode {
     static get newDummyNode() {
         return new this(BnfAstNode.newDummyNode);
     }
-    dig(cls, type = true, min = undefined, max = undefined, error = undefined) {
+    dig(cls, type = true, min = undefined, max = undefined, errorMes = undefined, errorType) {
         const array = [];
         const stopper = astNode => this.constructor.isSubClassOf(astNode.instance.baseType, cls) ? astNode : false;
         const process = astNode => array.push(astNode);
         this.recursive(stopper, process, type);
         if(min !== undefined && max !== undefined) {
             if((array.length < min) || (array.length > max)) {
-                throw error || new this.ErrorLayer(`Expected between ${min} and ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
+                if(errorMes !== undefined) {
+                    throw new this.ErrorLayer(errorMes, errorType);
+                }
+                throw new this.ErrorLayer(`Expected between ${min} and ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
             }
         } else if(min !== undefined) {
             if(array.length < min) {
-                throw error || new this.ErrorLayer(`Expected at least ${min} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
+                if(errorMes !== undefined) {
+                    throw new this.ErrorLayer(errorMes, errorType);
+                }
+                throw new this.ErrorLayer(`Expected at least ${min} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
             }
         } else if(max !== undefined) {
             if(array.length > max) {
-                throw error || new this.ErrorLayer(`Expected at most ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
+                if(errorMes !== undefined) {
+                    throw new this.ErrorLayer(errorMes, errorType);
+                }
+                throw new this.ErrorLayer(`Expected at most ${max} ${cls.name} in the leaf nodes, but found ${array.length}`, TypeError);
             }
         }
         return array;
@@ -962,17 +980,27 @@ class BnfAstManager extends AbstractManager {
             if (!this.#BnfClass[key]) throw new BnfLayerError(`Missing required class definition: ${key}`, Error);
         }
     }
+    get root() {
+        return super.root;
+    }
+    set root(bnfAstNode) {
+        const res = super.root = bnfAstNode;
+        this.#declare();
+        this.#assign();
+        this._hookAfterAnalyze(res);
+        return res;
+    }
+    _hookAfterAnalyze(rootBnfAstNode) {
+        // protected関数のつもり
+    }
     get Cls() {
         return this.#BnfClass;
     }
     set parserGenerator(val) {
         return this.#parserGenerator = val;
     }
-    get ruleForger() {
-        return this.#parserGenerator.ruleForger;
-    }
-    get modeDeck() {
-        return this.#parserGenerator.modeDeck;
+    get parserGenerator() {
+        return this.#parserGenerator;
     }
     get selectLogic() {
         return globalSelectLogic;
@@ -1005,7 +1033,7 @@ class BnfAstManager extends AbstractManager {
         const {
             NonTerminal,
         } = this.Cls;
-        const nonTerminal = NonTerminal.getOrCreate(this.#parserGenerator);
+        const nonTerminal = NonTerminal.getOrCreate(this.parserGenerator);
         const strObj = new StringObject(str);
         const bnfAstNode = nonTerminal.primaryParser.parse(strObj).node;
         return NonTerminal.nameHierarchy(bnfAstNode);
@@ -1035,6 +1063,10 @@ class BnfAstManager extends AbstractManager {
             currentSpace = currentSpace.field.get(name);
         }
         return currentSpace;
+    }
+    _getNameSpaceByStr(entryPoint, rootSpace = this.#nameSpace) {
+        // protectedな関数のつもり
+        return this.#getNameSpaceByStr(entryPoint, rootSpace);
     }
     #getNameSpaceByStr(entryPoint, rootSpace = this.#nameSpace) {
         const ep = this.#Str2hierarchy(entryPoint);
@@ -1420,6 +1452,33 @@ class BnfAstManager extends AbstractManager {
     #toRightRecursion(target) {
         throw new NotImplementedError;
     }
+    #declare() {
+        const {AssignLeft} = this.Cls;
+        const stopper = bnfAstNode => {
+            if(bnfAstNode.baseType === AssignLeft) {
+                return bnfAstNode;
+            }
+            return false;
+        };
+        const process = bnfAstNode => {
+            this.#declareBody(bnfAstNode);
+        };
+        this.root.recursive(stopper, process, 1);
+    }
+    #assign() {
+        const {Assign} = this.Cls;
+        const stopper = bnfAstNode => {
+            if(bnfAstNode.baseType === Assign) {
+                return bnfAstNode;
+            }
+            return false;
+        };
+        const process = bnfAstNode => {
+            const [left, right] = Assign.assign(bnfAstNode);
+            this.#assignBody(left, right);
+        };
+        this.root.recursive(stopper, process, 1);
+    }
     getFullNameStr(nameSpace) {
         const {
             NonTerminal,
@@ -1477,7 +1536,6 @@ class BnfAstManager extends AbstractManager {
                 return max;
             })();
             return select;
-            
         };
         const process = (astNode, strObj, result, seed) => {
             const child = parsers[result.candidate].parse(strObj, seed);
@@ -1485,7 +1543,7 @@ class BnfAstManager extends AbstractManager {
         };
         return AstNode.parserWrapper(bnfAstNode, test, process);
     }
-    declare(left, rootSpace = this.#nameSpace) {
+    #declareBody(left, rootSpace = this.#nameSpace) {
         const {
             NonTerminal,
         } = this.Cls;
@@ -1504,7 +1562,7 @@ class BnfAstManager extends AbstractManager {
         currentSpace.argNames = argNames?.map(bnfAstNode => bnfAstNode.bnfStr);
         return currentSpace;
     }
-    assign(left, right, rootSpace = this.#nameSpace) {
+    #assignBody(left, right, rootSpace = this.#nameSpace) {
         const {
             AssignRight,
         } = this.Cls;
@@ -1563,6 +1621,12 @@ class BnfAstManager extends AbstractManager {
             configurable: true,
         });
     }
+    declare(...args) {
+        this.#declareBody(...args);
+    }
+    assign(...args) {
+        this.#assignBody(...args);
+    }
     getParser(entryPoint = 'expr', withSystemScope = undefined, resolveRelfRecursion = false) {
         const {
             Assign,
@@ -1595,11 +1659,12 @@ class BnfAstManager extends AbstractManager {
     }
     declareAndAssignFromLeftRightStr(leftStr, rightStr, nameSpace) {
         const Assign = this.Cls.Assign;
-        const bnfAstNode = Assign.generateAssignFromLeftRightStr(leftStr, rightStr);
+        const bnfAstNode = Assign.generateAssignFromLeftRightStr(leftStr, rightStr, this.parserGenerator);
         const [left, right] = Assign.assign(bnfAstNode);
         this.declare(left, nameSpace);
         this.assign(left, right, nameSpace);
         bnfAstNode.setManager(this);
+        return 
     }
 }
 
@@ -1607,6 +1672,7 @@ class CoreAstNode extends BaseAstNode {
     #args;
     #define;
     #parserGenerator = null;
+    #lexicalAnalyzer = null;
     static genCount = 0;
     constructor(parserGenerator, ...args) {
         super();
@@ -1631,9 +1697,16 @@ class CoreAstNode extends BaseAstNode {
     get ErrorLayer() {
         return CoreLayerError;
     }
+    set lexicalAnalyzer(val) {
+        return this.#lexicalAnalyzer = val;
+    }
     get lexicalAnalyzer() {
+        if(this.#lexicalAnalyzer) {
+            return this.#lexicalAnalyzer;
+        }
         if(this.parent) {
-            return this.parent.lexicalAnalyzer;
+            this.#lexicalAnalyzer = this.parent.lexicalAnalyzer;
+            return this.#lexicalAnalyzer;
         }
     }
 
@@ -1784,9 +1857,6 @@ class CoreAstNode extends BaseAstNode {
             CoreAstNode.sameDefineCount++;
         }
         return manager.instance;
-    }
-    createOrGet(cls, ...args) {
-        cls.getOrCreate(this.parserGenerator, ...args);
     }
     toJSON() {
         if(this.operands.length) {
@@ -2117,8 +2187,7 @@ class CoreRepeater extends AbstractRepeater {
     #count;
     constructor(parserGenerator, ...args) {
         if(args.length > 1) {
-            // generateSyntaxParserを使うため，CoreGroupではなくUserGroupを使用する．
-            args = [UserCoreGroup.getOrCreate(parserGenerator, ...args)];
+            args = [CoreGroup.getOrCreate(parserGenerator, ...args)];
         }
         super(parserGenerator, ...args);
     }
@@ -2310,38 +2379,209 @@ class CoreNegTerminalSet extends CoreTerminalSet {
 }
 
 
+class UserRepeater extends CoreRepeater {
+    constructor(parserGenerator, ...args) {
+        if(args.length > 1) {
+            args = [UserCoreGroup.getOrCreate(parserGenerator, ...args)];
+        }
+        super(parserGenerator, ...args);
+    }
+    static generateSecondaryParser(bnfAstNode) {
+        if(bnfAstNode.instance.args[0]?.constructor === UserCoreGroup) {
+            for(const t of bnfAstNode.children) {
+                t.valids = bnfAstNode.valids;
+            }
+        }
+        const test = (strObj, index, seed) => {
+            let length = 0;
+            for(const bnfAstChild of bnfAstNode.children) {
+                const result = bnfAstChild.generateSecondaryParser.test(strObj, index + length, seed);
+                if(!result.success) {
+                    return {
+                        success: false,
+                        length: undefined,
+                    };
+                }
+                length += result.length;
+            }
+            return {
+                success: true,
+                length: length,
+            };
+        };
+        const process = (astNode, strObj, result, seed) => {
+            for(const bnfAstChild of bnfAstNode.children) {
+                const child = bnfAstChild.generateSecondaryParser.parse(strObj, seed);
+                astNode.addChild(child.node);
+            }
+        };
+        return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+}
+
+class UserAsterisk extends UserRepeater {
+    constructor(parserGenerator, ...args) {
+        super(parserGenerator, ...args);
+        this.min = 0;
+        this.max = Infinity;
+    }
+}
+
+class UserOption extends UserRepeater {
+    constructor(parserGenerator, ...args) {
+        if(args.length > 1) {
+            args = [CoreGroup.getOrCreate(parserGenerator, ...args)];
+        }
+        super(parserGenerator, ...args);
+        this.min = 0;
+        this.max = 1;
+    }
+}
+
+class UserPlus extends UserRepeater {
+    constructor(parserGenerator, ...args) {
+        super(parserGenerator, ...args);
+        this.min = 1;
+        this.max = Infinity;
+    }
+}
+
+class UserOr extends CoreOr {
+    static valids(bnfAstNode) {
+        // Or要素がbnfTokensとして返す要素は1つだけなので，有効な要素のインデックスは必ず0
+        return [0];
+    }
+    static generateSecondaryParser(bnfAstNode) {
+        return UserCoreGroup.generateSecondaryParser.call(this, bnfAstNode);
+    }
+}
+
+class FirstOr extends UserOr {
+    get selectLogic() {
+        return SelectLogic.first;
+    }
+}
+
+class UserTerminal extends UserCoreGroup {
+    static reuseable = true;
+    get bracket() {
+        return ['"', '"'];
+    }
+    get escape() {
+        return UserEscape;
+    }
+    get define() {
+        const escape = this.escape.getOrCreate(this.parserGenerator, );
+        return [
+            CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[0]), 
+            CoreAsterisk.getOrCreate(this.parserGenerator, CoreOr.getOrCreate(this.parserGenerator, CoreNegTerminalSet.getOrCreate(this.parserGenerator, this.bracket[1], escape.escapeChar), escape)), 
+            CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[1]),
+        ];
+    }
+    static targetString(bnfAstNode) {
+        let str = "";
+        for(const or of bnfAstNode.children[1].children) {
+            const charNode = or.children[0];
+            str += charNode.baseType.char(charNode);
+        }
+        return str;
+    }
+    static terminalTest(strObj, index, bnfAstNode, seed) {
+        const str = this.targetString(bnfAstNode);
+        const start = index;
+        const target = strObj.read(start, str.length);
+        if(str === target) {
+            return {
+                success: true,
+                length: str.length
+            };
+        }
+        return {
+            success: false,
+            length: undefined
+        }
+    }
+    static generateSecondaryParser(bnfAstNode) {
+        const test = (strObj, index, seed) => this.terminalTest(strObj, index, bnfAstNode, seed);
+        const process = (astNode, strObj, result, seed) => {
+            strObj.shift(result.length);
+            astNode.length = result.length;
+        };
+        return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+    static generateEvaluator(astNode) {
+        return new Evaluator(astNode);
+    }
+}
+
+class UserEscape extends UserCoreGroup {
+    static reuseable = true;
+    get escapeChar() {
+        return '\\';
+    }
+    get define() {
+        return [CoreTerminal.getOrCreate(this.parserGenerator, this.escapeChar), CoreTerminalDot.getOrCreate(this.parserGenerator, )];
+    }
+    static char(bnfAstNode) {
+        const char = bnfAstNode.children[1].bnfStr;
+        const escapes = new Map;
+        escapes.set('n', '\n');
+        escapes.set('t', '\t');
+        escapes.set('v', '\v');
+        escapes.set('r', '\r');
+        escapes.set('0', '\0');
+        escapes.set('b', '\b');
+        if(escapes.has(char)) {
+            return escapes.get(char);
+        }
+        return char;
+    }
+}
+
 module.exports = {
-    StringObject,
-    BaseAstNode,
-    AbstractManager,
-    SelectLogic,
-    Evaluator,
-    AstNode,
-    AstManager,
-    BnfAstNode,
-    BnfAstManager,
+    SelectLogic,        // 構文木作成時の選択ロジックの選択肢
+    StringObject,       // 文字列を抽象化して扱うクラス
+    BaseAstNode,        // 構文木を作るための基底クラス
+    AbstractManager,    // 構文木を管理するクラスの抽象クラス
+    Evaluator,          // 構文解析器によって解析された構文木（AstNode）の意味付けを実行するクラス
+    AstNode,            // 構文解析器によって生成された構文木の1ノードで，意味実装用のBaseAstNode派生クラス．
+    AstManager,         // AstNodeの管理クラス
+    BnfAstNode,         // パーサジェネレータによって生成された構文木の1ノードで，構文解析用のBaseAstNode派生クラス．
+    BnfAstManager,      // BnfAstNodeの管理クラス（主に依存関係の解決を取り扱う）．構文解析としての選択論理は.selectLogicに従う（デフォルト最長マッチ）
 
-    CoreAstNode,
-    LazyGenerator,
-    DummyOperand,
+    CoreAstNode,        // パーサジェネレータを構成する構文木の1ノードで，パーサ生成用のBaseAstNode派生クラス．
+    // 以下はCoreAstNodeの派生クラス
+    LazyGenerator,      // 再帰が発生する場合に遅延評価するためのクラス
+    DummyOperand,       // 必要に応じて後で差し替えられるためのダミークラス（左再帰の解決のために利用）
 
-    AbstractGroup,
-    CoreGroup,
-    CoreNonTerminal,
-    CoreTerminal,
-    CoreTerminalDot,
-    CoreTerminalSet,
-    CoreNegTerminalSet,
-    CoreWhiteSpace,
-    CoreComment,
-    CoreWhite,
+    // 以下はパーサジェネレータの核部分実装用であり，構文解析器を直接構成しない（CoreはBnfAstNodeまでしか生成しない）
+    AbstractGroup,      // ノードを束ねるためのCoreAstNode派生の抽象ノード
+    CoreGroup,          // コア部分で使用するノードグループまとめ用のAbstractGroup派生ノード
+    CoreNonTerminal,    // コア内で非終端文字として振る舞うCoreGroupの派生クラスとして作ったが，ほぼCoreGroupで足りている．ほぼ名前だけの問題．
+    CoreTerminal,       // コア内で終端文字列として振る舞うCoreAstNodeの派生クラス．
+    CoreTerminalDot,    // コア内で1文字の終端文字として振る舞うCoreTerminalの派生クラス．
+    CoreTerminalSet,    // コア内で終端文字集合として振る舞うCoreTerminalの派生クラス．
+    CoreNegTerminalSet, // コア内で終端文字集合の否定として振る舞うCoreTerminalSetの派生クラス．
+    CoreWhiteSpace,     // コア内で空白文字を処理するために振る舞うCoreTerminalの派生クラス．
+    CoreComment,        // コア内でコメントを処理するために振る舞うCoreTerminalの派生クラス．
+    CoreWhite,          // コア内でコメントと空白を一括してとりまとめるためのCoreNonTerminal派生クラス．（現状，CoreNonTerminalの唯一の派生クラス）
 
-    AbstractRepeater,
-    CoreRepeater,
-    CoreAsterisk,
-    CoreOption,
-    CorePlus,
-    CoreOr,
+    AbstractRepeater,   // 繰り返し処理を記述するときに使用するCoreGroup派生の抽象クラス
+    CoreRepeater,       // コア内で繰り返し処理をするときに使用する繰り返しのAbstractRepeaterの派生クラスで，コア繰り返しの基底クラス
+    CoreAsterisk,       // コア内で0回以上の繰り返し処理をするときのCoreRepeater派生クラス
+    CoreOption,         // コア内で0回または1回出現するときのCoreRepeater派生クラス
+    CorePlus,           // コア内で1回以上の繰り返し処理をするときのCoreRepeater派生クラス
 
-    UserCoreGroup,
+    CoreOr,             // コア内での選択ロジックを処理するCoreGroupの派生クラス．選択論理は最長マッチ
+
+    // 以下はパーサジェネレータの表層部分であり，構文解析器からコールされAstNodeを生成する責務を持つ
+    UserCoreGroup,      // AstNodeを生成する基本的な実装を組み込んだAbstractGroupの派生クラス．ほとんどのユーザー側ロジックはこれを継承して実装する．
+    UserRepeater,       // CoreRepeaterの派生クラスで，繰り返し処理に対応したAstNodeの生成を受け持つ
+    UserAsterisk,       // UserRepeaterの派生クラスで，0回以上の繰り返し処理
+    UserOption,         // UserRepeaterの派生クラスで，0回または1回
+    UserPlus,           // UserRepeaterの派生クラスで，1回以上の繰り返し処理
+    UserOr,             // CoreOrの派生クラスで，Or処理に対応したAstNode生成を受け持つ
+    FirstOr,            // UserOrの派生クラスで，選択論理がファーストマッチ固定
+    UserTerminal,       // UserCoreGroupの派生クラスで，BNF上の終端文字の定義を受け持つ
+    UserEscape,         // UserCoreGroupの派生クラスで，UserTerminal内でのエスケープ処理を受け持つ
 };

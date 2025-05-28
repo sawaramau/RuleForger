@@ -6,7 +6,16 @@
  */
 
 const {ExArray} = require('./Util.js');
-const {NotImplementedError, BaseLayerError, CoreLayerError, BnfLayerError, AstLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
+const {
+    NotImplementedError, 
+    BaseLayerError, 
+    CoreLayerError, 
+    BnfLayerError, 
+    AstLayerError, 
+    RuntimeLayerError, 
+    UncategorizedLayerError,
+    logContextOnly,
+} = require('./Error.js');
 
 class StringObject {
     #ptr;
@@ -481,6 +490,18 @@ class BaseAstNode {
         this.#parent = newNode.#parent;
         newNode.#parent = parentBk;
     }
+    get leaves() {
+        if(this.isUserLeaf) {
+            return [this];
+        }
+        const result = [];
+        for(const child of this.children) {
+            for(const leaf of child.leaves) {
+                result.push(leaf);
+            }
+        }
+        return result;
+    }
 }
 
 class AbstractManager {
@@ -535,6 +556,9 @@ class AbstractManager {
     dump(root = this.#root) {
         const chain = AbstractManager.SingleChildChain(root);
         this.constructor.dump(chain);
+    }
+    get leaves() {
+        return this.root.leaves;
     }
 }
 
@@ -881,6 +905,7 @@ class AstManager extends AbstractManager {
 
 class BnfAstNode extends BaseAstNode {
     #isRecursive = false;
+    #isToken = false;
     constructor(instance) {
         super(instance);
     }
@@ -959,6 +984,28 @@ class BnfAstNode extends BaseAstNode {
     }
     get argNames() {
         return this.baseType.argNames(this);
+    }
+    get isToken() {
+        return this.#isToken;
+    }
+    set isToken(val) {
+        return this.#isToken = val;
+    }
+    get typeName() {
+        return () => {
+            return logContextOnly(() => {
+                return this.instance.typeName(this);
+            });
+    
+        };
+    }
+    get syntaxLogText() {
+        return () => {
+            return logContextOnly(() => {
+                return this.instance.syntaxLogText(this);
+            });
+    
+        };
     }
 }
 
@@ -1747,6 +1794,9 @@ class CoreAstNode extends BaseAstNode {
     get isMyRepeater() {
         return false;
     }
+    get isUserLeaf() {
+        return false;
+    }
     get operands() {
         if(this.#define === undefined) {
             if("define" in this) {
@@ -1772,6 +1822,7 @@ class CoreAstNode extends BaseAstNode {
             return operand.testBnf(strObj, index);
         };
         const process = (bnfAstNode, strObj, result, seed) => {
+            bnfAstNode.isUserLeaf = this.isUserLeaf;
             operand.parseBnfProcess(bnfAstNode, strObj, result, seed);
         };
         return BnfAstNode.parserWrapper(operand, test, process);
@@ -1869,6 +1920,9 @@ class CoreAstNode extends BaseAstNode {
             name: this.constructor.name,
             args: this.args
         };
+    }
+    syntaxLogText(bnfAstNode) {
+        return bnfAstNode.bnfStr;
     }
 }
 

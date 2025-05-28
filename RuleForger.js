@@ -20,7 +20,8 @@ const {
     Assign,
     AssignRight,
     AssignLeft,
-    RightValue
+    RightValue,
+    LeafCategory,
 } = require('./RuleForgerBNF.js');
 
 const {
@@ -30,15 +31,59 @@ const {
     BnfLayerError, 
     AstLayerError, 
     RuntimeLayerError, 
-    UncategorizedLayerError
+    UncategorizedLayerError,
+    LogLevel,
+    withLogContext,
 } = require('./Error.js');
 
 class MyBnfAstManager extends BnfAstManager {
+    #enableLRparse = false;
+    #useLRparse = true;
     get ruleForger() {
         return this.parserGenerator.ruleForger;
     }
     get modeDeck() {
         return this.parserGenerator.modeDeck;
+    }
+    set useLR(val) {
+        this.#useLRparse = val;
+    }
+    get useLR() {
+        return this.#useLRparse && this.#enableLRparse;
+    }
+    _hookAfterAnalyze(rootBnfAstNode) {
+        if(!this.#useLRparse) {
+            return;
+        }
+        const tokenSet = LeafCategory.token;
+        const nonTerminalSet = LeafCategory.nonTerminal;
+        const terminalSet = LeafCategory.terminal;
+        const tokenLeaves = new Set(rootBnfAstNode.leaves.filter(leaf => tokenSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
+        const nonTerminalLeaves = new Set(rootBnfAstNode.leaves.filter(leaf => nonTerminalSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
+        const duplicationLeaves = nonTerminalLeaves.intersection(tokenLeaves);
+        const terminalLeaves = new Set(rootBnfAstNode.leaves.filter(leaf => terminalSet.has(leaf.baseType)));
+        if(terminalLeaves.size || duplicationLeaves.size) {
+            this.#enableLRparse = false;
+            if(terminalLeaves.size) {
+                const types = Array.from(new Set(Array.from(terminalLeaves).map(leaf => withLogContext(leaf.typeName))));
+                new BnfLayerError(
+                    `Cannot use LR parser ` +
+                    `because using follow terminals 
+                    ${types.map(type => {
+                        const filterd = Array.from(terminalLeaves).filter(leaf => withLogContext(leaf.typeName) === type);
+                        return "[" + type + "] : " + filterd.map(leaf => (withLogContext(leaf.syntaxLogText))).join(', ');
+                    }).join("\n                    ")}`, 
+                    SyntaxError, LogLevel.Info);
+            }
+            if(duplicationLeaves.size) {
+                new BnfLayerError(
+                    `Cannot use LR parser ` +
+                    `because name conflicts with token adn non terminal: ${Array.from(duplicationLeaves).join(", ")}`, 
+                    SyntaxError, LogLevel.Info);
+            }
+        } else {
+            this.#enableLRparse = true;
+        }
     }
 }
 // BnfAstManagerから構文解析器を作るための機能を抽出したクラス

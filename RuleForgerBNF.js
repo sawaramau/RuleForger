@@ -40,7 +40,14 @@ const {
 const {
     LexicalAnalyzer
 } = require('./LexicalAnalyzer.js');
-const {NotImplementedError, CoreLayerError, BnfLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
+const {
+    NotImplementedError, 
+    CoreLayerError, 
+    BnfLayerError, 
+    RuntimeLayerError, 
+    UncategorizedLayerError,
+    logContextOnly,
+} = require('./Error.js');
 
 class CoreEntryPoint extends CoreGroup {
     // BNF読む時点ではBnfAstManager等はいないので，
@@ -555,6 +562,9 @@ class MyNonTerminal extends UserCoreGroup {
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
+    get isUserLeaf() {
+        return true;
+    }
 }
 
 class Token extends CoreAstNode {
@@ -594,6 +604,9 @@ class Token extends CoreAstNode {
             astNode.length = result.length;
         }
         return AstNode.parserWrapper(bnfAstNode, test, process);
+    }
+    get isUserLeaf() {
+        return true;
     }
 }
 
@@ -1009,6 +1022,45 @@ class MyTerminals extends UserCoreGroup {
             )
         ];
     }
+    get isUserLeaf() {
+        return true;
+    }
+    typeName(bnfAstNode) {
+        const child = bnfAstNode.children[0].children[0].instance;
+        const dict = [
+            [UserTerminal, "String"],
+            [NoCaseTerminal, "Case insensitive string"],
+            [MyTerminalSet, "Char set"],
+        ];
+        for(const cls of dict) {
+            if(child.constructor === cls[0]) {
+                return cls[1];
+            }
+        }
+        return undefined;
+    }
+    syntaxLogText(bnfAstNode) {
+        const replace = (str) => {
+            if (str.trim() === "") {
+              // 空白・制御文字だけで構成されている場合にのみ変換
+              return str
+                .replace(/ /g, "<SP>")
+                .replace(/\t/g, "<TAB>")
+                .replace(/\u00A0/g, "<NBSP>")
+                .replace(/\u3000/g, "<IDEOSP>")
+                .replace(/\u200B/g, "<ZWS>")
+                .replace(/^$/g, "<empty>");
+            } else {
+              // 通常の文字列はそのまま返す
+              return str;
+            }
+        };
+        const child = bnfAstNode.children[0].children[0].instance;
+        const bracket = child.bracket;
+        const length = bnfAstNode.bnfStr.length - bracket[0].length - bracket[1].length;
+        const start = bracket[0].length;
+        return bracket[0] + replace(bnfAstNode.bnfStr.substring(start, start + length)) + bracket[1];
+    }
 }
 
 class NoCaseTerminal extends UserTerminal {
@@ -1054,6 +1106,12 @@ class MyTerminalSet extends UserTerminal {
     }
 }
 
+const LeafCategory = {
+    token: new Set([Token]),
+    terminal: new Set([MyTerminals]),
+    nonTerminal: new Set([MyNonTerminal]),
+};
+
 module.exports = {
     CoreEntryPoint,
     MyNonTerminal,
@@ -1061,5 +1119,6 @@ module.exports = {
     Assign,
     AssignRight,
     AssignLeft,
-    RightValue
+    RightValue,
+    LeafCategory
 };

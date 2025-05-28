@@ -26,7 +26,7 @@ class ErrorStrictLevel {
 class GlobalErrorLevelManager {
     static #singleton = null;
     #strictLevel = ErrorStrictLevel.Low;
-    #logLevel = LogLevel.Error;
+    #logLevel = LogLevel.Info;
     constructor() {
         if(GlobalErrorLevelManager.#singleton) {
             return GlobalErrorLevelManager.#singleton;
@@ -46,13 +46,58 @@ class GlobalErrorLevelManager {
         return this.#logLevel;
     }
 }
+
+class LogContext {
+    static #singleton = null;
+    constructor() {
+        if(LogContext.#singleton) {
+            return LogContext.#singleton;
+        }
+        LogContext.#singleton = this;
+    }
+    #logContext = false;
+    get logContextOnly() {
+        return (fn, ...args) => {
+            if(!this.#logContext) {
+                throw new SyntaxError(
+                    "This function is for display/log purposes only and must not affect logic.\n"
+                    +  "To use this function, wrap the call in `logContextOnly(() => ...)`."
+                );
+            }
+            return fn(...args);
+        }
+    }
+    get withLogContext() {
+        return (fn, ...args) => {
+            this.#logContext = true;
+            try {
+                return fn(...args);
+            } finally {
+                this.#logContext = false;
+            }
+        }
+    }
+    
+}
+const logContext = new LogContext;
 const errorLevelManager = new GlobalErrorLevelManager;
 
 class BaseLayerError extends Error {
     constructor(message, rule, logLevel = 0, name = new.target.name.slice(0, -5)) {
         super(name + "." + rule.name + ": " + message);
+        const levMessage = [];
+        levMessage[LogLevel.Error] = "Error";
+        levMessage[LogLevel.Warn] = "Warn";
+        levMessage[LogLevel.Info] = "Info";
+        levMessage[LogLevel.Debug] = "Debug";
+        const prefix = (name, ruleName, logLevel) => {
+            return "[" +name + "][" 
+            + rule.name.replace("Error", "") + "][" 
+            + levMessage[logLevel] + "]";
+        };
         this.name = name;
         this.rule = rule;
+        const fullMessage = prefix(name, rule.name, logLevel) + ": " + message;
         // ログレベルがエラー，または厳格モード時にログレベルがWarnであればthrow
         if(logLevel === LogLevel.Error || logLevel <= errorLevelManager.strictLevel) {
             throw this;
@@ -60,11 +105,11 @@ class BaseLayerError extends Error {
         // ログレベルがログ表示ポリシー以下であれば表示
         if (logLevel <= errorLevelManager.logLevel) {
             if (logLevel === LogLevel.Warn) {
-                console.warn(name + "." + rule.name.replace("Error", "") +".Warning: " + message);
+                console.warn(fullMessage);
             } else if (logLevel === LogLevel.Info) {
-                console.info(name + "." + rule.name.replace("Error", "") + ".Info: " + message);
+                console.info(fullMessage);
             } else if (logLevel === LogLevel.Debug) {
-                console.log(name + "." + rule.name.replace("Error", "") + ".Debug: " + message);
+                console.log(fullMessage);
             }
         }
     }
@@ -111,4 +156,6 @@ module.exports = {
             super(message, rule, logLevel);
         }
     },
+    logContextOnly: logContext.logContextOnly,
+    withLogContext: logContext.withLogContext,
 };

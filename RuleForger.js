@@ -85,6 +85,13 @@ class MyBnfAstManager extends BnfAstManager {
             this.#enableLRparse = true;
         }
     }
+    getParser(entryPoint = 'expr', withSystemScope = undefined, resolveRelfRecursion = false) {
+        if(this.useLR) {
+
+        } else {
+            return super.getParser(entryPoint, withSystemScope, resolveRelfRecursion);
+        }
+    }
 }
 // BnfAstManagerから構文解析器を作るための機能を抽出したクラス
 class ParserGenerator {
@@ -154,9 +161,7 @@ class RuleForger {
     #entryPoint = 'expr';
     #evaluators;
     #peeks;
-    get debugLevel() {
-        return 1;
-    }
+    
     set modeDeck(val) {
         return this.#modeDeck = val;
     }

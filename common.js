@@ -928,11 +928,11 @@ class BnfAstNode extends BaseAstNode {
         return AstNode;
     }
     get generateSecondaryParser() {
-        return this.baseType.generateSecondaryParser(this);
+        return this.baseType.LL.generateSecondaryParser(this);
     }
     get generateSecondaryParserWithout() {
-        if(this.baseType.generateSecondaryParserWithout) {
-            return this.baseType.generateSecondaryParserWithout(this);
+        if(this.baseType.LL.generateSecondaryParserWithout) {
+            return this.baseType.LL.generateSecondaryParserWithout(this);
         }
         throw new CoreLayerError("Not implemented generateSecoundaryParserWithout", NotImplementedError);
     }
@@ -1654,7 +1654,7 @@ class BnfAstManager extends AbstractManager {
         Object.defineProperty(nameSpace, "localBaseParser", {
             get: () => {
                 // assign時点では左再帰未対策のため，getterで登録する．
-                const syntaxParser = AssignRight.generateSecondaryParser(nameSpace.right);
+                const syntaxParser = AssignRight.LL.generateSecondaryParser(nameSpace.right);
                 return syntaxParser;
             },
             configurable: true,
@@ -1842,8 +1842,12 @@ class CoreAstNode extends BaseAstNode {
     // 文字列の食べ方を定義するようなtest関数とparse関数を含むobjectを返す
     // test関数はstrObjと現在座標を受け取って，successとlengthを含むオブジェクトを返す非破壊関数
     // parse関数はstrObjを受け取ってtrue/falseを返す関数で，成功時はstrObjを消費し，bnfToken.childrenのparseを完了する
-    static generateSecondaryParser(bnfAstNode) {
-        throw new CoreLayerError(this.name + '\'s generateSecondaryParser is not implemented.', NotImplementedError);
+    // OuterClassと同じ基底クラスを持つようにしておく（superを同じノリで参照するため）
+    static LL = class extends BaseAstNode {
+        static generateSecondaryParser(bnfAstNode) {
+            // this(CoreAstNode)はbaseType経由で参照することで継承を保証する．
+            throw new CoreLayerError(bnfAstNode.baseType.name + '\'s generateSecondaryParser is not implemented.', NotImplementedError);
+        }
     }
     static generateEvaluator(astNode) {
         // 特に指定がないとき，token.childrenからevaluateを得る
@@ -2037,9 +2041,11 @@ class CoreNonTerminal extends CoreGroup {
             )
         ];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        throw new CoreLayerError(this.name + '\'s generateSecondaryParser is not implemented.', NotImplementedError);
-    }
+    static LL = class extends CoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            throw new CoreLayerError(bnfAstNode.baseType.name + '\'s generateSecondaryParser is not implemented.', NotImplementedError);
+        }
+    };
 }
 
 class CoreTerminal extends CoreAstNode {
@@ -2195,40 +2201,43 @@ class UserCoreGroup extends AbstractGroup {
         }
         return bnfAstNode.valids;
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const children = this.valids(bnfAstNode).map(i => bnfAstNode.children[i]);
-        const parsers = children.map(t => t.generateSecondaryParser);
-        const test = (strObj, index, seed) => {
-            let length = 0;
-            for(const [i, parser] of parsers.entries()) {
-                const result = parser.test(strObj, index, seed);
-                if(!result.success) {
-                    return {
-                        success: false,
-                        length: undefined,
-                    };
-                }
-                length += result.length;
-            }
-            return {
-                success: true,
-                length
-            };
-        };
-        const process = (astNode, strObj, result, seed) => {
-            for(const parser of parsers) {
-                const child = parser.parse(strObj, seed);
-                astNode.addChild(child.node);
-            }
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static generateEvaluator(astNode) {
         if(astNode.children.length === 1) {
             return astNode.children[0].evaluator;
         }
         return new Evaluator(astNode.children.map(child => child.evaluator));
     }
+    static LL = class extends AbstractGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            const children = bnfAstNode.baseType.valids(bnfAstNode).map(i => bnfAstNode.children[i]);
+            const parsers = children.map(t => t.generateSecondaryParser);
+            const test = (strObj, index, seed) => {
+                let length = 0;
+                for(const [i, parser] of parsers.entries()) {
+                    const result = parser.test(strObj, index, seed);
+                    if(!result.success) {
+                        return {
+                            success: false,
+                            length: undefined,
+                        };
+                    }
+                    length += result.length;
+                }
+                return {
+                    success: true,
+                    length
+                };
+            };
+            const process = (astNode, strObj, result, seed) => {
+                for(const parser of parsers) {
+                    const child = parser.parse(strObj, seed);
+                    astNode.addChild(child.node);
+                }
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+
+    };
 }
 
 class AbstractRepeater extends CoreGroup {
@@ -2440,37 +2449,39 @@ class UserRepeater extends CoreRepeater {
         }
         super(parserGenerator, ...args);
     }
-    static generateSecondaryParser(bnfAstNode) {
-        if(bnfAstNode.instance.args[0]?.constructor === UserCoreGroup) {
-            for(const t of bnfAstNode.children) {
-                t.valids = bnfAstNode.valids;
-            }
-        }
-        const test = (strObj, index, seed) => {
-            let length = 0;
-            for(const bnfAstChild of bnfAstNode.children) {
-                const result = bnfAstChild.generateSecondaryParser.test(strObj, index + length, seed);
-                if(!result.success) {
-                    return {
-                        success: false,
-                        length: undefined,
-                    };
+    static LL = class extends CoreRepeater {
+        static generateSecondaryParser(bnfAstNode) {
+            if(bnfAstNode.instance.args[0]?.constructor === UserCoreGroup) {
+                for(const t of bnfAstNode.children) {
+                    t.valids = bnfAstNode.valids;
                 }
-                length += result.length;
             }
-            return {
-                success: true,
-                length: length,
+            const test = (strObj, index, seed) => {
+                let length = 0;
+                for(const bnfAstChild of bnfAstNode.children) {
+                    const result = bnfAstChild.generateSecondaryParser.test(strObj, index + length, seed);
+                    if(!result.success) {
+                        return {
+                            success: false,
+                            length: undefined,
+                        };
+                    }
+                    length += result.length;
+                }
+                return {
+                    success: true,
+                    length: length,
+                };
             };
-        };
-        const process = (astNode, strObj, result, seed) => {
-            for(const bnfAstChild of bnfAstNode.children) {
-                const child = bnfAstChild.generateSecondaryParser.parse(strObj, seed);
-                astNode.addChild(child.node);
-            }
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
+            const process = (astNode, strObj, result, seed) => {
+                for(const bnfAstChild of bnfAstNode.children) {
+                    const child = bnfAstChild.generateSecondaryParser.parse(strObj, seed);
+                    astNode.addChild(child.node);
+                }
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+    };
 }
 
 class UserAsterisk extends UserRepeater {
@@ -2505,8 +2516,10 @@ class UserOr extends CoreOr {
         // Or要素がbnfTokensとして返す要素は1つだけなので，有効な要素のインデックスは必ず0
         return [0];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        return UserCoreGroup.generateSecondaryParser.call(this, bnfAstNode);
+    static LL = class extends CoreOr {
+        static generateSecondaryParser(bnfAstNode) {
+            return UserCoreGroup.LL.generateSecondaryParser.call(bnfAstNode.baseType, bnfAstNode);
+        }
     }
 }
 
@@ -2541,6 +2554,7 @@ class UserTerminal extends UserCoreGroup {
         return str;
     }
     static terminalTest(strObj, index, bnfAstNode, seed) {
+        bnfAstNode.assertBaseInstanceOf(this);
         const str = this.targetString(bnfAstNode);
         const start = index;
         const target = strObj.read(start, str.length);
@@ -2555,17 +2569,19 @@ class UserTerminal extends UserCoreGroup {
             length: undefined
         }
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const test = (strObj, index, seed) => this.terminalTest(strObj, index, bnfAstNode, seed);
-        const process = (astNode, strObj, result, seed) => {
-            strObj.shift(result.length);
-            astNode.length = result.length;
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            const test = (strObj, index, seed) => bnfAstNode.baseType.terminalTest(strObj, index, bnfAstNode, seed);
+            const process = (astNode, strObj, result, seed) => {
+                strObj.shift(result.length);
+                astNode.length = result.length;
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+    };
 }
 
 class UserEscape extends UserCoreGroup {

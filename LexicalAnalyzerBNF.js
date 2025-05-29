@@ -34,6 +34,7 @@ const {
     UserPlus,
     UserTerminal,
     UserEscape,
+    UserOr,
 } = require('./common.js');
 
 const {NotImplementedError, CoreLayerError, BnfLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
@@ -115,11 +116,6 @@ class AssignRight extends UserCoreGroup {
         // 字句解析に左再帰は存在しないので，空の配列を返す．
         return [];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const parser = super.generateSecondaryParser(bnfAstNode);
-
-        return parser;
-    }
 }
 
 class RightValue extends UserCoreGroup {
@@ -141,19 +137,6 @@ class RightValue extends UserCoreGroup {
     static valids() {
         throw new CoreLayerError("This method must be not called.", Error);
     }
-    static generateSecondaryParser(bnfAstNode) {
-        bnfAstNode.assertBaseInstanceOf(this);
-        const reg = bnfAstNode.children.find(t => t.baseType === UserRegExp);
-        const ast = bnfAstNode.children.find(t => t.baseType === UserAsterisk);
-        ast.valids = [1];
-        const regParser = reg.generateSecondaryParser;
-        const test = regParser.test;
-        const process = (astNode, strObj, result, seed) => {
-            const child = regParser.parse(strObj, seed);
-            astNode.addChild(child.node);
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static getMetas(bnfAstNode) {
         bnfAstNode.assertBaseInstanceOf(this);
         const flags = bnfAstNode.dig(UserFlag).map(flag => UserFlag.flagName(flag));
@@ -165,6 +148,22 @@ class RightValue extends UserCoreGroup {
             type
         };
     }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            bnfAstNode.assertBaseInstanceOf(RightValue);
+            const reg = bnfAstNode.children.find(t => t.baseType === UserRegExp);
+            const ast = bnfAstNode.children.find(t => t.baseType === UserAsterisk);
+            ast.valids = [1];
+            const regParser = reg.generateSecondaryParser;
+            const test = regParser.test;
+            const process = (astNode, strObj, result, seed) => {
+                const child = regParser.parse(strObj, seed);
+                astNode.addChild(child.node);
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+
+    };
 }
 
 class Name extends UserCoreGroup {
@@ -195,31 +194,24 @@ class MyNonTerminal extends UserCoreGroup {
         bnfAstNode.assertBaseInstanceOf(this);
         return bnfAstNode.dig(Name);
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
-        const test = (strObj, index, seed = null) => {
-            const result = parser.test(strObj, index, seed);
-            return result;
-        };
-        const process = (astNode, strObj, result, seed) => {
-            astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullNameStr(result.space);
-            return parser.process(astNode, strObj, result, seed);
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
-}
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
+            const test = (strObj, index, seed = null) => {
+                const result = parser.test(strObj, index, seed);
+                return result;
+            };
+            const process = (astNode, strObj, result, seed) => {
+                astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullNameStr(result.space);
+                return parser.process(astNode, strObj, result, seed);
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
 
-class UserOr extends CoreOr {
-    static valids(bnfAstNode) {
-        // Or要素がbnfTokensとして返す要素は1つだけなので，有効な要素のインデックスは必ず0
-        return [0];
-    }
-    static generateSecondaryParser(bnfAstNode) {
-        return UserCoreGroup.generateSecondaryParser.call(this, bnfAstNode);
-    }
+    };
 }
 
 class UserRegExp extends UserTerminal {

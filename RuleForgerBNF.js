@@ -198,33 +198,6 @@ class RightValue extends UserCoreGroup {
     static valids() {
         throw new CoreLayerError("This method must be not called.", Error);
     }
-    static generateSecondaryParser(bnfAstNode) {
-        bnfAstNode.assertBaseInstanceOf(this);
-        const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
-        const plus = bnfAstNode.children.find(t => t.baseType === UserPlus);
-        plus.valids = [0];
-        const parser = plus.generateSecondaryParser;
-        const test = parser.test;
-        const process = (astNode, strObj, result, seed) => {
-            const child = parser.parse(strObj, seed);
-            astNode.addChild(child.node);
-            // デフォルト値を与えるトークンを生やす
-            if(opt.count) {
-                const variables = VariableDefault.getDefaults(opt.children[0]);
-                for(const variable of variables) {
-                    const {anchor, strObj, nonTerminal} = variable;
-                    const result = nonTerminal.generateSecondaryParser.test(strObj, 0);
-                    if(!result.success) {
-                        throw new BnfLayerError("Default value define おかしい", SyntaxError);
-                    }
-                    const child = nonTerminal.generateSecondaryParser.parse(strObj);
-                    child.node.setAnchor(anchor);
-                    astNode.addChild(child.node);
-                }
-            }
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static getMostLeftNotNullableTerms(bnfAstNode) {
         const result = [];
         bnfAstNode.assertBaseInstanceOf(this);
@@ -287,6 +260,35 @@ class RightValue extends UserCoreGroup {
         }
         return result;
     }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            bnfAstNode.assertBaseInstanceOf(RightValue);
+            const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
+            const plus = bnfAstNode.children.find(t => t.baseType === UserPlus);
+            plus.valids = [0];
+            const parser = plus.generateSecondaryParser;
+            const test = parser.test;
+            const process = (astNode, strObj, result, seed) => {
+                const child = parser.parse(strObj, seed);
+                astNode.addChild(child.node);
+                // デフォルト値を与えるトークンを生やす
+                if(opt.count) {
+                    const variables = VariableDefault.getDefaults(opt.children[0]);
+                    for(const variable of variables) {
+                        const {anchor, strObj, nonTerminal} = variable;
+                        const result = nonTerminal.generateSecondaryParser.test(strObj, 0);
+                        if(!result.success) {
+                            throw new BnfLayerError("Default value define おかしい", SyntaxError);
+                        }
+                        const child = nonTerminal.generateSecondaryParser.parse(strObj);
+                        child.node.setAnchor(anchor);
+                        astNode.addChild(child.node);
+                    }
+                }
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+    };
 }
 
 class Argument extends UserCoreGroup {
@@ -336,15 +338,17 @@ class BaseCommander extends UserCoreGroup {
             )
         ];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        bnfAstNode.assertBaseInstanceOf(this);
-        const test = (strObj, index, seed) => {
-            // 通常，コマンドは文字列を食べない．
-            // 食べる場合は別途定義する．
-            return {success: true, length: 0};
-        };
-        return AstNode.parserWrapper(bnfAstNode, test);
-    }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            bnfAstNode.assertBaseInstanceOf(BaseCommander);
+            const test = (strObj, index, seed) => {
+                // 通常，コマンドは文字列を食べない．
+                // 食べる場合は別途定義する．
+                return {success: true, length: 0};
+            };
+            return AstNode.parserWrapper(bnfAstNode, test);
+        }
+    };
     static getArguments(bnfAstNode) {
         const args = bnfAstNode.dig(Argument);
         return args;
@@ -355,60 +359,62 @@ class ModeSwitcher extends BaseCommander {
     static get command() {
         return "mode";
     }
-    static generateSecondaryParser(bnfAstNode) {
-        bnfAstNode.assertBaseInstanceOf(this);
-        const args = this.getArguments(bnfAstNode);
-        const modeName = args[0]?.bnfStr;
-        const entryPoint = args[1]?.bnfStr;
-        if(modeName === undefined) {
-            throw new BnfLayerError("Mode name is missing in mode-switch directive.", SyntaxError);
-        }
-        const mode = bnfAstNode.bnfAstManager.modeDeck.get(modeName);
-        if(mode === undefined) {
-            throw new BnfLayerError(`Mode not found: no rule set registered for mode < ${modeName}>.`, SyntaxError);
-        }
-        const switchedParser = mode.parser(entryPoint);
-        const astManager = new AstManager;
-        astManager.evaluators = mode.evaluators || new Map;
-        astManager.peeks = mode.peeks || new Map;
-        const strObjMemory = new Map;
-        const getStrObj = (strObj, index = strObj.ptr) => {
-            if(!strObjMemory.has(strObj)) {
-                const strObjCache = new Map;
-                strObjMemory.set(strObj, strObjCache);
-            }
-            const strObjCache = strObjMemory.get(strObj);
-            if(!strObjCache.has(index)) {
-                const newStrObj = new StringObject(strObj.read(index));
-                strObjCache.set(index, newStrObj);
-            }
-            return strObjCache.get(index);
-        }
-        const test = (strObj, index, seed) => {
-            // test側は新しいstrObjでなくても問題なく解析できるが，
-            // Wrapperのキャッシュ機能を活かすためにparse側と共通のstrObjを提供する
-            const newStrObj = getStrObj(strObj, index);
-            return switchedParser.test(newStrObj, 0, seed);
-        };
-        const process = (astNode, strObj, result, seed) => {
-            // RuleForger毎にStringObjectを新規に作ってあげないと文字の位置を正しく取得できない．
-            const newStrObj = getStrObj(strObj);
-            const parsed = switchedParser.parse(newStrObj);
-            // switchedParserは元のstrObjを食べないので，strObjを手動で進める．
-            strObj.shift(parsed.node.str.length);
-            astNode.length = parsed.node.str.length;
-            astManager.root = parsed.node;
-            // モードスイッチ後の結果取得は管理クラス等の縁切りを確実に行うため
-            // evaluatorsを経由せずevaluateを直接定義する．
-            astNode.evaluate = ($, str) => {
-                return astManager.root.evaluator.value;;
-            };
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
+    static LL = class extends BaseCommander {
+        static generateSecondaryParser(bnfAstNode) {
+            bnfAstNode.assertBaseInstanceOf(ModeSwitcher);
+            const args = bnfAstNode.baseType.getArguments(bnfAstNode);
+            const modeName = args[0]?.bnfStr;
+            const entryPoint = args[1]?.bnfStr;
+            if(modeName === undefined) {
+                throw new BnfLayerError("Mode name is missing in mode-switch directive.", SyntaxError);
+            }
+            const mode = bnfAstNode.bnfAstManager.modeDeck.get(modeName);
+            if(mode === undefined) {
+                throw new BnfLayerError(`Mode not found: no rule set registered for mode < ${modeName}>.`, SyntaxError);
+            }
+            const switchedParser = mode.parser(entryPoint);
+            const astManager = new AstManager;
+            astManager.evaluators = mode.evaluators || new Map;
+            astManager.peeks = mode.peeks || new Map;
+            const strObjMemory = new Map;
+            const getStrObj = (strObj, index = strObj.ptr) => {
+                if(!strObjMemory.has(strObj)) {
+                    const strObjCache = new Map;
+                    strObjMemory.set(strObj, strObjCache);
+                }
+                const strObjCache = strObjMemory.get(strObj);
+                if(!strObjCache.has(index)) {
+                    const newStrObj = new StringObject(strObj.read(index));
+                    strObjCache.set(index, newStrObj);
+                }
+                return strObjCache.get(index);
+            }
+            const test = (strObj, index, seed) => {
+                // test側は新しいstrObjでなくても問題なく解析できるが，
+                // Wrapperのキャッシュ機能を活かすためにparse側と共通のstrObjを提供する
+                const newStrObj = getStrObj(strObj, index);
+                return switchedParser.test(newStrObj, 0, seed);
+            };
+            const process = (astNode, strObj, result, seed) => {
+                // RuleForger毎にStringObjectを新規に作ってあげないと文字の位置を正しく取得できない．
+                const newStrObj = getStrObj(strObj);
+                const parsed = switchedParser.parse(newStrObj);
+                // switchedParserは元のstrObjを食べないので，strObjを手動で進める．
+                strObj.shift(parsed.node.str.length);
+                astNode.length = parsed.node.str.length;
+                astManager.root = parsed.node;
+                // モードスイッチ後の結果取得は管理クラス等の縁切りを確実に行うため
+                // evaluatorsを経由せずevaluateを直接定義する．
+                astNode.evaluate = ($, str) => {
+                    return astManager.root.evaluator.value;
+                };
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+    };
 }
 
 class Commands extends UserCoreGroup {
@@ -528,43 +534,45 @@ class MyNonTerminal extends UserCoreGroup {
         bnfAstNode.assertBaseInstanceOf(this);
         return bnfAstNode.dig(Name);
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
-        const test = (strObj, index, seed = null) => {
-            if(!bnfAstNode.isRecursive || !seed) {
-                const result = parser.test(strObj, index, seed);
-                return result;
-            }
-            if(bnfAstNode.isRecursive && seed) {
-                // 左再帰処理用のテスト結果横流し
-                const length = (() => {
-                    if(seed.inProgress) {
-                        return seed.length;
-                    }
-                    return 0;
-                })();
-                return {
-                    success: true,
-                    length: length,
-                };
-            }
-        };
-        const process = (astNode, strObj, result, seed) => {
-            if(!seed || !bnfAstNode.isRecursive) {
-                astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullNameStr(result.space);
-                return parser.process(astNode, strObj, result, seed);
-            }
-            // 自身が左再帰であるならば，そもそもparse時点で呼ばれるべきではない．
-            throw new CoreLayerError("Must not reach here.", Error);
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
     get isUserLeaf() {
         return true;
     }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
+            const test = (strObj, index, seed = null) => {
+                if(!bnfAstNode.isRecursive || !seed) {
+                    const result = parser.test(strObj, index, seed);
+                    return result;
+                }
+                if(bnfAstNode.isRecursive && seed) {
+                    // 左再帰処理用のテスト結果横流し
+                    const length = (() => {
+                        if(seed.inProgress) {
+                            return seed.length;
+                        }
+                        return 0;
+                    })();
+                    return {
+                        success: true,
+                        length: length,
+                    };
+                }
+            };
+            const process = (astNode, strObj, result, seed) => {
+                if(!seed || !bnfAstNode.isRecursive) {
+                    astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullNameStr(result.space);
+                    return parser.process(astNode, strObj, result, seed);
+                }
+                // 自身が左再帰であるならば，そもそもparse時点で呼ばれるべきではない．
+                throw new CoreLayerError("Must not reach here.", Error);
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+    };
 }
 
 class Token extends CoreAstNode {
@@ -577,37 +585,39 @@ class Token extends CoreAstNode {
         }
         return this.lexicalAnalyzer.testBnf(strObj, index);
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const lexicalAnalyzer = bnfAstNode.instance.lexicalAnalyzer;
-        const strObjMemory = new Map;
-        const getStrObj = (strObj, index = strObj.ptr) => {
-            if(!strObjMemory.has(strObj)) {
-                const strObjCache = new Map;
-                strObjMemory.set(strObj, strObjCache);
-            }
-            const strObjCache = strObjMemory.get(strObj);
-            if(!strObjCache.has(index)) {
-                const newStrObj = new StringObject(strObj.read(index));
-                strObjCache.set(index, newStrObj);
-            }
-            return strObjCache.get(index);
-        }
-        const test = (strObj, index, seed) => {
-            const newStrObj = getStrObj(strObj, index);
-            const result = lexicalAnalyzer.test(bnfAstNode, newStrObj, 0, seed);
-            return result;
-        }
-        const process = (astNode, strObj, result, seed) => {
-            const newStrObj = getStrObj(strObj, strObj.ptr);
-            lexicalAnalyzer.process(bnfAstNode, astNode, newStrObj, result, seed);
-            strObj.shift(result.length);
-            astNode.length = result.length;
-        }
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     get isUserLeaf() {
         return true;
     }
+    static LL = class extends CoreAstNode {
+        static generateSecondaryParser(bnfAstNode) {
+            const lexicalAnalyzer = bnfAstNode.instance.lexicalAnalyzer;
+            const strObjMemory = new Map;
+            const getStrObj = (strObj, index = strObj.ptr) => {
+                if(!strObjMemory.has(strObj)) {
+                    const strObjCache = new Map;
+                    strObjMemory.set(strObj, strObjCache);
+                }
+                const strObjCache = strObjMemory.get(strObj);
+                if(!strObjCache.has(index)) {
+                    const newStrObj = new StringObject(strObj.read(index));
+                    strObjCache.set(index, newStrObj);
+                }
+                return strObjCache.get(index);
+            }
+            const test = (strObj, index, seed) => {
+                const newStrObj = getStrObj(strObj, index);
+                const result = lexicalAnalyzer.test(bnfAstNode, newStrObj, 0, seed);
+                return result;
+            }
+            const process = (astNode, strObj, result, seed) => {
+                const newStrObj = getStrObj(strObj, strObj.ptr);
+                lexicalAnalyzer.process(bnfAstNode, astNode, newStrObj, result, seed);
+                strObj.shift(result.length);
+                astNode.length = result.length;
+            }
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+    };
 }
 
 class Renamer extends UserCoreGroup {
@@ -618,34 +628,36 @@ class Renamer extends UserCoreGroup {
             this.args[0].getOrCreate(this.parserGenerator, )
         ];
     }
-    static get #reference() {
+    static get reference() {
         return 2;
     }
     static valids(bnfAstNode) {
-        return [this.#reference];
+        return [this.reference];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const parser = super.generateSecondaryParser(bnfAstNode);
-        const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
-        const anchor = (() => {
-            if(opt.count) {
-                return opt.children[0].children[0].bnfStr;
-            }
-            const token = bnfAstNode.children[this.#reference].dig(Token, true, 0, 1, "Alter name setting error.", SyntaxError)[0];
-            if(token) {
-                return token.bnfStr;
-            }
-            const nonTerminal = bnfAstNode.children[this.#reference].dig(MyNonTerminal, true, 1, 1, "Alter name setting error.", SyntaxError)[0];
-            return MyNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(MyNonTerminal.selector);
-        })();
-        const newProcess = (astNode, strObj, result, seed) => {
-            parser.process(astNode, strObj, result, seed);
-            if(anchor !== null) {
-                astNode.setAnchor(anchor);
-            }
-        };
-        return AstNode.parserWrapper(bnfAstNode, parser.test, newProcess);
-    }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            const parser = super.LL.generateSecondaryParser(bnfAstNode);
+            const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
+            const anchor = (() => {
+                if(opt.count) {
+                    return opt.children[0].children[0].bnfStr;
+                }
+                const token = bnfAstNode.children[bnfAstNode.baseType.reference].dig(Token, true, 0, 1, "Alter name setting error.", SyntaxError)[0];
+                if(token) {
+                    return token.bnfStr;
+                }
+                const nonTerminal = bnfAstNode.children[bnfAstNode.baseType.reference].dig(MyNonTerminal, true, 1, 1, "Alter name setting error.", SyntaxError)[0];
+                return MyNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(MyNonTerminal.selector);
+            })();
+            const newProcess = (astNode, strObj, result, seed) => {
+                parser.process(astNode, strObj, result, seed);
+                if(anchor !== null) {
+                    astNode.setAnchor(anchor);
+                }
+            };
+            return AstNode.parserWrapper(bnfAstNode, parser.test, newProcess);
+        }
+    };
 }
 
 class Variable extends UserCoreGroup {
@@ -740,42 +752,44 @@ class MyNegOperate extends UserCoreGroup {
             )
         ];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const or = bnfAstNode.children[0];
-        const child = or.children[0];
-        const parser = (() => {
-            if(child.baseType === MyRepeaterSet) {
-                return child.baseType.generateSecondaryParser(bnfAstNode);
-            }
-            child.valids = [1];
-            const parser = super.generateSecondaryParser(bnfAstNode);
-            const test = (strObj, index, seed) => {
-                const result = parser.test(strObj, index, seed);
-                if(result.success) {
-                    return {
-                        success: false,
-                        length: undefined,
-                    }
-                }
-                return {
-                    success: true,
-                    length: 0,
-                }
-            };
-            const process = (astNode) => {
-                astNode.assertion = true;
-                astNode.match = true;
-            };
-            return AstNode.parserWrapper(bnfAstNode, test, process);
-        })();
-        return parser;
-    }
     static generateEvaluator(astNode) {
         if(astNode.assertion) {
             return new Evaluator(astNode.match);
         }
         return super.generateEvaluator(astNode);
     }
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode) {
+            const or = bnfAstNode.children[0];
+            const child = or.children[0];
+            const parser = (() => {
+                if(child.baseType === MyRepeaterSet) {
+                    return child.baseType.LL.generateSecondaryParser(bnfAstNode);
+                }
+                child.valids = [1];
+                const parser = super.LL.generateSecondaryParser(bnfAstNode);
+                const test = (strObj, index, seed) => {
+                    const result = parser.test(strObj, index, seed);
+                    if(result.success) {
+                        return {
+                            success: false,
+                            length: undefined,
+                        }
+                    }
+                    return {
+                        success: true,
+                        length: 0,
+                    }
+                };
+                const process = (astNode) => {
+                    astNode.assertion = true;
+                    astNode.match = true;
+                };
+                return AstNode.parserWrapper(bnfAstNode, test, process);
+            })();
+            return parser;
+        }
+    };
 }
 
 class MyRepeaterSet extends UserCoreGroup {
@@ -805,44 +819,6 @@ class MyRepeater extends AbstractRepeater {
     static valids() {
         return [0];
     }
-    static generateSecondaryParser(bnfAstNode) {
-        const bnfChild = bnfAstNode.children.find(t => t.baseType === bnfAstNode.instance.#elemType);
-        const parser = bnfChild.generateSecondaryParser;
-        const test = (strObj, index, seed) => {
-            let length = 0;
-            let count = 0;
-            while(1) {
-                const result = parser.test(strObj, index + length, seed);
-                if(result.success === false || result.length === 0) {
-                    break;
-                }
-                length += result.length;
-                count++;
-                if(count >= bnfAstNode.baseType.max(bnfAstNode)) {
-                    break;
-                }
-            }
-            if(count >= bnfAstNode.baseType.min(bnfAstNode)) {
-                return {
-                    success: true,
-                    length,
-                    count
-                };
-            }
-            return {
-                success: false,
-                length: undefined,
-                count
-            };
-        };
-        const process = (astNode, strObj, result, seed) => {
-            for(let i = 0; i < result.count; i++) {
-                const child = parser.parse(strObj, seed);
-                astNode.addChild(child.node);
-            }
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
     get isMyRepeater() {
         return true;
     }
@@ -855,6 +831,47 @@ class MyRepeater extends AbstractRepeater {
     }
     static max(bnfAstNode) {
         return Infinity;
+    }
+    static LL = class extends AbstractRepeater {
+        static generateSecondaryParser(bnfAstNode) {
+            const bnfChild = bnfAstNode.children.find(t => t.baseType === bnfAstNode.instance.elemType);
+            const parser = bnfChild.generateSecondaryParser;
+            const test = (strObj, index, seed) => {
+                let length = 0;
+                let count = 0;
+                while(1) {
+                    const result = parser.test(strObj, index + length, seed);
+                    if(result.success === false || result.length === 0) {
+                        break;
+                    }
+                    length += result.length;
+                    count++;
+                    if(count >= bnfAstNode.baseType.max(bnfAstNode)) {
+                        break;
+                    }
+                }
+                if(count >= bnfAstNode.baseType.min(bnfAstNode)) {
+                    return {
+                        success: true,
+                        length,
+                        count
+                    };
+                }
+                return {
+                    success: false,
+                    length: undefined,
+                    count
+                };
+            };
+            const process = (astNode, strObj, result, seed) => {
+                for(let i = 0; i < result.count; i++) {
+                    const child = parser.parse(strObj, seed);
+                    astNode.addChild(child.node);
+                }
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+
     }
 }
 
@@ -950,63 +967,65 @@ class BnfOr extends UserCoreGroup {
         }
         return defines.filter(n => !exclude.has(n));
     }
-    static generateSecondaryParser(bnfAstNode, exclude = new Set) {
-        bnfAstNode.assertBaseInstanceOf(this);
-        const candidates = this.candidates(bnfAstNode, exclude);
-        const parsers = candidates.map(t => t.generateSecondaryParser);
-        const test = (strObj, index, seed) => {
-            const lens = parsers.map(parser => parser.test(strObj, index, seed));
-            return (() => {
-                const max = {
-                    success: false,
-                    length: undefined,
-                    candidate: undefined,
-                };
-                const first = {
-                    success: false,
-                    length: undefined,
-                    candidate: undefined,
-                };
-                for(const [i, len] of lens.entries()) {
-                    if(!len.success) {
-                        continue
-                    }
-                    if((!max.success) || (max.length < len.length)) {
-                        max.success = true;
-                        max.length = len.length;
-                        max.candidate = candidates[i];
-                        max.parser = parsers[i];
-                    }
-                    if(!first.success) {
-                        first.success = true;
-                        first.length = len.length;
-                        first.candidate = candidates[i];
-                        first.parser = parsers[i];
-                        if(bnfAstNode.bnfAstManager.selectLogic === SelectLogic.first) {
-                            return first;
+    static LL = class extends UserCoreGroup {
+        static generateSecondaryParser(bnfAstNode, exclude = new Set) {
+            bnfAstNode.assertBaseInstanceOf(BnfOr);
+            const candidates = bnfAstNode.baseType.candidates(bnfAstNode, exclude);
+            const parsers = candidates.map(t => t.generateSecondaryParser);
+            const test = (strObj, index, seed) => {
+                const lens = parsers.map(parser => parser.test(strObj, index, seed));
+                return (() => {
+                    const max = {
+                        success: false,
+                        length: undefined,
+                        candidate: undefined,
+                    };
+                    const first = {
+                        success: false,
+                        length: undefined,
+                        candidate: undefined,
+                    };
+                    for(const [i, len] of lens.entries()) {
+                        if(!len.success) {
+                            continue
+                        }
+                        if((!max.success) || (max.length < len.length)) {
+                            max.success = true;
+                            max.length = len.length;
+                            max.candidate = candidates[i];
+                            max.parser = parsers[i];
+                        }
+                        if(!first.success) {
+                            first.success = true;
+                            first.length = len.length;
+                            first.candidate = candidates[i];
+                            first.parser = parsers[i];
+                            if(bnfAstNode.bnfAstManager.selectLogic === SelectLogic.first) {
+                                return first;
+                            }
                         }
                     }
+                    return max;
+                })();
+            };
+            const process = (astNode, strObj, result, seed) => {
+                const decided = result.parser;
+                const child = decided.parse(strObj, seed);
+                astNode.addChild(child.node);
+                return;
+            };
+            return AstNode.parserWrapper(bnfAstNode, test, process);
+        }
+        // 左再帰解決用関数
+        static generateSecondaryParserWithout(bnfAstNode) {
+            return (exclude) => {
+                if(exclude instanceof Array) {
+                    exclude = new Set(exclude);
                 }
-                return max;
-            })();
-        };
-        const process = (astNode, strObj, result, seed) => {
-            const decided = result.parser;
-            const child = decided.parse(strObj, seed);
-            astNode.addChild(child.node);
-            return;
-        };
-        return AstNode.parserWrapper(bnfAstNode, test, process);
-    }
-    // 左再帰解決用関数
-    static generateSecondaryParserWithout(bnfAstNode) {
-        return (exclude) => {
-            if(exclude instanceof Array) {
-                exclude = new Set(exclude);
-            }
-            return this.generateSecondaryParser(bnfAstNode, exclude);
-        };
-    }
+                return bnfAstNode.baseType.LL.generateSecondaryParser(bnfAstNode, exclude);
+            };
+        }
+    };
 }
 class MyOr extends BnfOr {
 }

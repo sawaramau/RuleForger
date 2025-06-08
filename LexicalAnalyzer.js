@@ -58,7 +58,7 @@ class MyBnfAstManager extends BnfAstManager {
         for(const assign of assigns) {
             const [left, right] = Assign.assign(assign);
             const ruleName = left.nameHierarchy.map(bnf => bnf.str).join(MyNonTerminal.selector);
-            const rv = right.dig(RightValue, true, 1, 1)[0];
+            const rv = right.digOne(RightValue, {required: true});
             const meta = RightValue.getMetas(rv);
             for(const flag of meta.flags) {
                 if(!this.#flagMap.has(flag)) {

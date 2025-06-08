@@ -45,6 +45,7 @@ const {
     CoreLayerError, 
     BnfLayerError, 
     RuntimeLayerError, 
+    SyntaxLayerError,
     UncategorizedLayerError,
     logContextOnly,
 } = require('./Error.js');
@@ -132,8 +133,8 @@ class AssignLeft extends UserCoreGroup {
     }
     static nameHierarchy(bnfAstNode) {
         bnfAstNode.assertBaseInstanceOf(this);
-        const hierarchies = bnfAstNode.dig(MyNonTerminal, true, 1, 1);
-        return MyNonTerminal.nameHierarchy(hierarchies[0]);
+        const hierarchies = bnfAstNode.digOne(MyNonTerminal, {required:1});
+        return MyNonTerminal.nameHierarchy(hierarchies);
     }
 }
 
@@ -208,14 +209,14 @@ class RightValue extends UserCoreGroup {
             if(!child) {
                 return;
             }
-            const assignRight = child.dig(AssignRight, true, 0, 1);
-            if(assignRight.length) {
-                const terms = AssignRight.getMostLeftNotNullableTerms(assignRight[0]);
+            const assignRight = child.digOne(AssignRight, {required: false});
+            if(assignRight) {
+                const terms = AssignRight.getMostLeftNotNullableTerms(assignRight);
                 for(const term of terms) {
                     result.push(term);
                 }
             } else {
-                const rightElement = child.dig(RightElement, true, 1, 1)[0];
+                const rightElement = child.digOne(RightElement, {required: true});
                 const re = rightElement.children.find(c => c.baseType !== CoreWhite);
                 result.push(re);
             }
@@ -239,14 +240,14 @@ class RightValue extends UserCoreGroup {
             if(!child) {
                 return;
             }
-            const assignRight = child.dig(AssignRight, true, 0, 1);
-            if(assignRight.length) {
-                const terms = AssignRight.getAllTerms(assignRight[0]);
+            const assignRight = child.digOne(AssignRight, {required: false});
+            if(assignRight) {
+                const terms = AssignRight.getAllTerms(assignRight);
                 for(const term of terms) {
                     result.push(term);
                 }
             } else {
-                const rightElement = child.dig(RightElement, true, 1, 1)[0];
+                const rightElement = child.digOne(RightElement, {required: true});
                 const re = rightElement.children.find(c => c.baseType !== CoreWhite);
                 result.push(re);
             }
@@ -260,7 +261,7 @@ class RightValue extends UserCoreGroup {
         }
         return result;
     }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             bnfAstNode.assertBaseInstanceOf(RightValue);
             const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
@@ -338,7 +339,7 @@ class BaseCommander extends UserCoreGroup {
             )
         ];
     }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             bnfAstNode.assertBaseInstanceOf(BaseCommander);
             const test = (strObj, index, seed) => {
@@ -362,7 +363,7 @@ class ModeSwitcher extends BaseCommander {
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
-    static LL = class extends BaseCommander {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             bnfAstNode.assertBaseInstanceOf(ModeSwitcher);
             const args = bnfAstNode.baseType.getArguments(bnfAstNode);
@@ -448,10 +449,12 @@ class RightElement extends UserCoreGroup {
     get define() {
         return [
                 CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
-                FirstOr.getOrCreate(this.parserGenerator, 
+                UserOr.getOrCreate(this.parserGenerator, 
+                    // 基本最長マッチだが，同長の場合Token優先なのでToken→MyNonTerminalの順
                     Token.getOrCreate(this.parserGenerator, ),
                     MyNonTerminal.getOrCreate(this.parserGenerator, ),
                     MyTerminals.getOrCreate(this.parserGenerator, ),
+                    Reference.getOrCreate(this.parserGenerator),
                     // AssignRight は再帰なので，遅延生成とする
                     LazyGenerator.getOrCreate(this.parserGenerator, Parentheses, AssignRight),
                 ),
@@ -537,10 +540,7 @@ class MyNonTerminal extends UserCoreGroup {
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
-    get isUserLeaf() {
-        return true;
-    }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
             const test = (strObj, index, seed = null) => {
@@ -573,6 +573,79 @@ class MyNonTerminal extends UserCoreGroup {
             return AstNode.parserWrapper(bnfAstNode, test, process);
         }
     };
+    static LR = class extends this.superCls {
+        static generateSecondaryParser(bnfAstNode) {
+            // １．構文定義側のモード遷移情報を字句定義に落とし込む
+            // このとき，可能なら遷移先を把握し，不可能なら終了トークンが現れるまで単なる文字列とする
+            const bnfAstManager = bnfAstNode.bnfAstManager;
+            const root = bnfAstManager.root;
+            const switchers = root.dig(ModeSwitcher).map(switcher => switcher.climb(Commands));
+            // bnfAstManager.dump(bnfAstNode.root);
+            // １．１．モードスイッチの直前の要素が定義されているか調べる
+            const contextMap = new Map;
+            const startToMode = new Map;
+            const startStrSet = new Set;
+            const endToMode = new Map;
+            const endStrSet = new Set;
+            for(const switcher of switchers) {
+                const siblings = switcher.climb(Assign).dig(RightValue).find().leaves.filter(sibling => ClassCategory.isLRops.has(sibling.baseType));
+                const midIndex = siblings.findIndex(sibling => sibling === switcher);
+                if(midIndex === -1) {
+                    throw "aaa";
+                }
+                const before = siblings.slice(0, midIndex).reverse();
+                const after = siblings.slice(midIndex + 1);
+                const prev = before.find(sibling => !sibling.isNullable);
+                const next = after.find(sibling => !sibling.isNullable);
+                if(prev === undefined) {
+                    new BnfLayerError(
+                        `${switcher.bnfStr} must be directly preceded by a terminal or non-terminal. No adjacent node found.`, 
+                        SyntaxError);
+                }
+                if(prev.instance instanceof MyNonTerminal) {
+                    new BnfLayerError(
+                        `Nonterminal "${prev.bnfStr}" is specified immediately before a mode transition(${switcher.bnfStr}), but only terminal symbols (tokens) are allowed as transition triggers.\n` + 
+                        `Please use a token directly to initiate a mode transition.\n` +
+                        `Line: ${prev.pos.LINE}, Col: ${prev.pos.COLUMN}`, 
+                        SyntaxError);
+                }
+                const modeName = BaseCommander.getArguments(switcher)[0].bnfStr;
+                if(!contextMap.has(modeName)) {
+                    contextMap.set(modeName, {
+                        starts: new Set,
+                        ends: new Set,
+                    });
+                }
+                const context = contextMap.get(modeName);
+                context.starts.add(prev);
+                context.ends.add(next);
+                startToMode.set(prev, switcher);
+                startStrSet.add(prev.bnfStr);
+                if(next) {
+                    endToMode.set(next, switcher);
+                    endStrSet.add(next.bnfStr);
+                }
+            }
+            // １．２．前操作で調べたprevの他の用途を調べる
+            const sameTokensAsStart = new Set(root.dig(Token).filter(token => startStrSet.has(token.bnfStr)));
+            console.log(sameTokensAsStart.size, startToMode.size);
+            throw "aa";
+            // ２．前操作での情報をもとに文字列を分割する
+
+            // ３．がんばる
+
+            const test = (strObj, index) => {
+                console.log(strObj.str);
+                throw new Error;
+            };
+            const parse = (strObj) => {
+
+            };
+            return {
+                test, parse
+            };
+        }
+    }
 }
 
 class Token extends CoreAstNode {
@@ -585,10 +658,7 @@ class Token extends CoreAstNode {
         }
         return this.lexicalAnalyzer.testBnf(strObj, index);
     }
-    get isUserLeaf() {
-        return true;
-    }
-    static LL = class extends CoreAstNode {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             const lexicalAnalyzer = bnfAstNode.instance.lexicalAnalyzer;
             const strObjMemory = new Map;
@@ -618,15 +688,23 @@ class Token extends CoreAstNode {
             return AstNode.parserWrapper(bnfAstNode, test, process);
         }
     };
+    static LR = class extends this.superCls {
+        static generateSecondaryParser(bnfAstNode) {
+            return Token.LL.generateSecondaryParser(bnfAstNode);
+        }
+    }
 }
 
 class Renamer extends UserCoreGroup {
     get define() {
         return [
-            CoreTerminal.getOrCreate(this.parserGenerator, '$'), 
+            CoreTerminal.getOrCreate(this.parserGenerator, Renamer.mark), 
             CoreOption.getOrCreate(this.parserGenerator, VarName.getOrCreate(this.parserGenerator, ), CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, ':'), CoreWhite.getOrCreate(this.parserGenerator, )),
             this.args[0].getOrCreate(this.parserGenerator, )
         ];
+    }
+    static get mark() {
+        return '$';
     }
     static get reference() {
         return 2;
@@ -634,21 +712,28 @@ class Renamer extends UserCoreGroup {
     static valids(bnfAstNode) {
         return [this.reference];
     }
-    static LL = class extends UserCoreGroup {
+    static getAnchor(bnfAstNode, {marked = false} = {}) {
+        const anchor = (() => {
+            const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
+            if(opt.count) {
+                return opt.digOne(VarName).bnfStr;
+            }
+            const token = bnfAstNode.children[bnfAstNode.baseType.reference].digOne(Token, {required: false, errorMes: "Alter name setting error.", errorType: SyntaxError});
+            if(token) {
+                return token.bnfStr;
+            }
+            const nonTerminal = bnfAstNode.children[bnfAstNode.baseType.reference].digOne(MyNonTerminal, {required: true, errorMes: "Alter name setting error.", errorType: SyntaxError});
+            return MyNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(MyNonTerminal.selector);
+        })();
+        return (marked ? this.mark : "") + anchor;
+    }
+    static getBody(bnfAstNode) {
+        return this.valids(bnfAstNode).map(i => bnfAstNode.children[i])[0];
+    }
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             const parser = super.LL.generateSecondaryParser(bnfAstNode);
-            const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
-            const anchor = (() => {
-                if(opt.count) {
-                    return opt.children[0].children[0].bnfStr;
-                }
-                const token = bnfAstNode.children[bnfAstNode.baseType.reference].dig(Token, true, 0, 1, "Alter name setting error.", SyntaxError)[0];
-                if(token) {
-                    return token.bnfStr;
-                }
-                const nonTerminal = bnfAstNode.children[bnfAstNode.baseType.reference].dig(MyNonTerminal, true, 1, 1, "Alter name setting error.", SyntaxError)[0];
-                return MyNonTerminal.nameHierarchy(nonTerminal).map(t => t.bnfStr).join(MyNonTerminal.selector);
-            })();
+            const anchor = Renamer.getAnchor(bnfAstNode);
             const newProcess = (astNode, strObj, result, seed) => {
                 parser.process(astNode, strObj, result, seed);
                 if(anchor !== null) {
@@ -656,6 +741,70 @@ class Renamer extends UserCoreGroup {
                 }
             };
             return AstNode.parserWrapper(bnfAstNode, parser.test, newProcess);
+        }
+    };
+}
+
+class Reference extends UserCoreGroup {
+    get define() {
+        return [
+            CoreTerminal.getOrCreate(this.parserGenerator, '$$'), 
+            VarName.getOrCreate(this.parserGenerator, ),
+        ];
+    }
+    static getPath(bnfAstNode) {
+        const anchor = bnfAstNode.digOne(VarName).bnfStr;
+        const renamer = bnfAstNode.leafView.filter(leaf => leaf.nodeTraits.isRenamer).find(renamer => Renamer.getAnchor(renamer) === anchor);
+        if(renamer === undefined) {
+            new BnfLayerError(
+                `Undefined reference anchor ${anchor}.`, 
+                SyntaxError);
+        }
+
+    }
+    static getAnchor(bnfAstNode) {
+        const anchor = bnfAstNode.digOne(VarName).bnfStr;
+        return anchor;
+    }
+    static getRule(bnfAstNode) {
+        const anchor = this.getAnchor(bnfAstNode);
+        const renamer = bnfAstNode.leafView.filter(leaf => leaf.nodeTraits.isRenamer).find(renamer => Renamer.getAnchor(renamer) === anchor);
+        if(renamer === undefined) {
+            new BnfLayerError(
+                `Undefined reference anchor ${anchor}.`, 
+                SyntaxError);
+        }
+        return Renamer.getBody(renamer);
+    }
+    static Ready(astNode) {
+        const bnfAstNode = astNode.instance;
+        const anchor = this.getAnchor(bnfAstNode);
+        const across = bnfAstNode.across({
+            onlyTag: true, 
+            followOr: false, 
+            returnPath: true,
+        }).find(info => {
+            const tag = info.node;
+            return tag.baseType.getAnchor(tag) === anchor;
+        });
+        const targetAst = astNode.getAstNodeTraceBnfPath(across.node, across.path);
+        if(targetAst.str !== astNode.str) {
+            const targetAnchor = targetAst.baseType.getAnchor(targetAst.instance, {marked: true});
+            new SyntaxLayerError(
+                `Tag mismatch: ${bnfAstNode.bnfStr} must match the value of ${targetAnchor}, but got "${astNode.str}" instead of "${targetAst.str}".`,
+                Error);
+        }
+    }
+    static LL = class extends this.superCls {
+        static generateSecondaryParser(bnfAstNode) {
+            bnfAstNode.assertBaseInstanceOf(Reference);
+            const rule = Reference.getRule(bnfAstNode);
+            const parser = rule.baseType.LL.generateSecondaryParser(rule);
+            // const {process} = parser;
+            const process = (astNode, strObj, result, seed) => {
+                return parser.process(astNode, strObj, result, seed);
+            };
+            return AstNode.parserWrapper(bnfAstNode, parser.test, process);
         }
     };
 }
@@ -689,12 +838,12 @@ class VariableDefault extends UserCoreGroup {
         const ast = bnfAstNode.children.find(t => t.baseType === CoreAsterisk);
         const opt = bnfAstNode.children.find(t => t.baseType === CoreOption);
         for(const child of ast.children) {
-            const bnfAstNode = child.dig(DefaultValue, 1, 1, 1)[0];
+            const bnfAstNode = child.digOne(DefaultValue, {required: true});
             const defaultVal = DefaultValue.getDefault(bnfAstNode);
             defaults.push(defaultVal);
         }
         {
-            const bnfAstNode = opt.dig(DefaultValue, 1, 1, 1)[0];
+            const bnfAstNode = opt.digOne(DefaultValue, {required: true});
             if(bnfAstNode) {
                 const defaultVal = DefaultValue.getDefault(bnfAstNode);
                 defaults.push(defaultVal);    
@@ -758,7 +907,7 @@ class MyNegOperate extends UserCoreGroup {
         }
         return super.generateEvaluator(astNode);
     }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             const or = bnfAstNode.children[0];
             const child = or.children[0];
@@ -832,7 +981,7 @@ class MyRepeater extends AbstractRepeater {
     static max(bnfAstNode) {
         return Infinity;
     }
-    static LL = class extends AbstractRepeater {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             const bnfChild = bnfAstNode.children.find(t => t.baseType === bnfAstNode.instance.elemType);
             const parser = bnfChild.generateSecondaryParser;
@@ -967,7 +1116,7 @@ class BnfOr extends UserCoreGroup {
         }
         return defines.filter(n => !exclude.has(n));
     }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode, exclude = new Set) {
             bnfAstNode.assertBaseInstanceOf(BnfOr);
             const candidates = bnfAstNode.baseType.candidates(bnfAstNode, exclude);
@@ -1040,9 +1189,6 @@ class MyTerminals extends UserCoreGroup {
                 MyTerminalSet.getOrCreate(this.parserGenerator, ),
             )
         ];
-    }
-    get isUserLeaf() {
-        return true;
     }
     typeName(bnfAstNode) {
         const child = bnfAstNode.children[0].children[0].instance;
@@ -1126,9 +1272,22 @@ class MyTerminalSet extends UserTerminal {
 }
 
 const LeafCategory = {
+    // symbol
     token: new Set([Token]),
-    terminal: new Set([MyTerminals]),
+    literal: new Set([MyTerminals]),
     nonTerminal: new Set([MyNonTerminal]),
+    // command
+    command: new Set([Commands]),
+    name: new Set([Name]),
+};
+
+const ClassCategory = {
+    isUserLeaf: LeafCategory,
+    isUserBranch: new Set([MyOr, BnfOr]),
+    isRenamer: new Set([Renamer]),
+    isTest: new Set([Reference]),
+    isLRops: new Set([Token, MyNonTerminal, Commands]),
+    isSymbol: new Set([Token, MyTerminals, MyNonTerminal]),
 };
 
 module.exports = {
@@ -1139,5 +1298,5 @@ module.exports = {
     AssignRight,
     AssignLeft,
     RightValue,
-    LeafCategory
+    ClassCategory,
 };

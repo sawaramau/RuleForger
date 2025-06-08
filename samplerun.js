@@ -4,15 +4,23 @@ const {RuleForger, ModeDeck} = require("./RuleForger.js")
 
 const modeDeck = new ModeDeck;
 
+const sampleTokens0 = `
+START: /start /
+gomi: /gomi /
+END: /:end/
+WHITE: /\\\\s*/ ~skip
+`;
 const sampleTokens = `
 NUMBER: /((\\\\+|-)?[1-9][0-9]*|0)/ !reserve -> int
-PLUS: /\\\\+/ ~reserve
+PLUS: /\\\\+/ ~reserve;
 WHITE: /\\\\s*/ ~skip
 `;
 
 const parentBnf = 
 `
-entrypoint = "start " $a:@mode(test) ":end"
+entrypoint = "start " ($a:@mode(test)) END
+// start = START | START | gomix START WHITE
+gomix = gomi | gomi
 `;
 const bnf = 
 `
@@ -30,10 +38,11 @@ line.proddiv = $proddiv; // ワンライナーで書いたり，行末にコメ�
 
 // name:を省略した場合，ルール名称がそのまま別名となる．
 // 左再帰記述OK
-expr.add = $v1:expr PLUS $v2:expr.term
+expr.add = $v1:expr WHITE PLUS $v2:expr.term
 // 定義の左側にデフォルト値を与えるような記述が可能
-expr.minus = $v1:expr white "-" white $v2:expr.term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white
+expr.minus = ($v1:expr white) $v3:(("-" | white)|"xxx"| white white white) WHITE white (white |  $$v3) white $v2:expr.term | {$v1:term(\`40\`), $v2:term(\`10\`)} white "aa" white 
 expr.term = $term;
+// expr.NUMBER = $NUMBER
 
 proddiv.prod = $v1:proddiv white "*" white $v2:proddiv.term
 proddiv.div = $v1:proddiv white "/" white $v2:proddiv.term
@@ -48,10 +57,12 @@ term = $NUMBER
 // 終端文字の設定はUserTerminalsを参照
 // 逆スラッシュをエスケープ文字として登録しているので，'や"を終端文字として読み込むまではできるが，
 // エスケープ文字とセットでどう解釈するか，という内容をまだなにも定義していない．詳細はstatic targetStringあたりを眺める．
-digits = '0456789' | "1" | "2" | "3"
+digits = '0456789' | ("1" | ("2" | "3")) | "4"
 nonZero = '23456789'| "1"
 e = ''
 white = e | ' '*
+NUMBER = e | ' '*
+WHITE = e | ' '*
 `;
 const evals = [
     {
@@ -130,7 +141,7 @@ const chidlForger = new RuleForger;
 const mainForger = new RuleForger;
 modeDeck.addRuleForger("main", mainForger);
 modeDeck.addRuleForger("test", chidlForger);
-mainForger.setSyntax(parentBnf);
+mainForger.setSyntax(parentBnf, sampleTokens0);
 chidlForger.setSyntax(bnf, sampleTokens);
 // chidlForger.dumpBnfAST(); // このパーサジェネレータが与えられたBNFをどう解釈しているかdumpする．
 const middle = performance.now();
@@ -138,12 +149,12 @@ chidlForger.evaluators = evals;
 chidlForger.peeks = evals;
 mainForger.entryPoint = 'entrypoint';
 chidlForger.entryPoint = 'entrypoint';
-const programs = ["1", "1 - 5+ 9", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
+const programs = ["1", "1 -xxx 5+ 9", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
     const result = mainForger.parse("start " + prog + "  :end");
     const result1 = chidlForger.parse(prog);
     console.log('Result:', result.executer.value);
+    chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
 }
-chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
 chidlForger.dumpCacheResult();
 const end = performance.now();

@@ -151,6 +151,11 @@ module.exports = {
             super(message, rule, logLevel);
         }
     },
+    SyntaxLayerError: class extends BaseLayerError {
+        constructor(message, rule, logLevel) {
+            super(message, rule, logLevel);
+        }
+    },
     UncategorizedLayerError: class extends BaseLayerError {
         constructor(message, rule, logLevel) {
             super(message, rule, logLevel);

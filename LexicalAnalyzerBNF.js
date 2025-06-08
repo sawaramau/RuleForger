@@ -96,8 +96,8 @@ class AssignLeft extends UserCoreGroup {
     }
     static nameHierarchy(bnfAstNode) {
         bnfAstNode.assertBaseInstanceOf(this);
-        const hierarchies = bnfAstNode.dig(MyNonTerminal, true, 1, 1);
-        return MyNonTerminal.nameHierarchy(hierarchies[0]);
+        const hierarchies = bnfAstNode.digOne(MyNonTerminal, {required: true});
+        return MyNonTerminal.nameHierarchy(hierarchies);
     }
 }
 
@@ -141,14 +141,14 @@ class RightValue extends UserCoreGroup {
         bnfAstNode.assertBaseInstanceOf(this);
         const flags = bnfAstNode.dig(UserFlag).map(flag => UserFlag.flagName(flag));
         const excludes = bnfAstNode.dig(UserExclude).map(exclude => UserExclude.GetExcludeTokenSet(exclude));
-        const type = bnfAstNode.dig(UserType, 1, 0, 1).reduce((acc, cur) => UserType.getEvaluatorSetterStr(cur), undefined);
+        const type = bnfAstNode.dig(UserType, {min: 0, max: 1}).reduce((acc, cur) => UserType.getEvaluatorSetterStr(cur), undefined);
         return {
             flags, 
             excludes, 
             type
         };
     }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             bnfAstNode.assertBaseInstanceOf(RightValue);
             const reg = bnfAstNode.children.find(t => t.baseType === UserRegExp);
@@ -197,7 +197,7 @@ class MyNonTerminal extends UserCoreGroup {
     static generateEvaluator(astNode) {
         return new Evaluator(astNode);
     }
-    static LL = class extends UserCoreGroup {
+    static LL = class extends this.superCls {
         static generateSecondaryParser(bnfAstNode) {
             const parser = bnfAstNode.bnfAstManager.getSecondaryParser(bnfAstNode);
             const test = (strObj, index, seed = null) => {

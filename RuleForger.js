@@ -21,7 +21,7 @@ const {
     AssignRight,
     AssignLeft,
     RightValue,
-    LeafCategory,
+    ClassCategory,
 } = require('./RuleForgerBNF.js');
 
 const {
@@ -49,28 +49,30 @@ class MyBnfAstManager extends BnfAstManager {
         this.#useLRparse = val;
     }
     get useLR() {
+        // return true;
         return this.#useLRparse && this.#enableLRparse;
     }
     _hookAfterAnalyze(rootBnfAstNode) {
         if(!this.#useLRparse) {
             return;
         }
-        const tokenSet = LeafCategory.token;
-        const nonTerminalSet = LeafCategory.nonTerminal;
-        const terminalSet = LeafCategory.terminal;
-        const tokenLeaves = new Set(rootBnfAstNode.leaves.filter(leaf => tokenSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
-        const nonTerminalLeaves = new Set(rootBnfAstNode.leaves.filter(leaf => nonTerminalSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
+        const tokenSet = this.leafCategorizer.literal;
+        const nonTerminalSet = this.leafCategorizer.nonTerminal;
+        const literalSet = this.leafCategorizer.literal;
+        const leaves = rootBnfAstNode.leaves.flat(Infinity);
+        const tokenLeaves = new Set(leaves.filter(leaf => tokenSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
+        const nonTerminalLeaves = new Set(leaves.filter(leaf => nonTerminalSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
         const duplicationLeaves = nonTerminalLeaves.intersection(tokenLeaves);
-        const terminalLeaves = new Set(rootBnfAstNode.leaves.filter(leaf => terminalSet.has(leaf.baseType)));
-        if(terminalLeaves.size || duplicationLeaves.size) {
+        const literalLeaves = new Set(leaves.filter(leaf => literalSet.has(leaf.baseType)));
+        if(literalLeaves.size || duplicationLeaves.size) {
             this.#enableLRparse = false;
-            if(terminalLeaves.size) {
-                const types = Array.from(new Set(Array.from(terminalLeaves).map(leaf => withLogContext(leaf.typeName))));
+            if(literalLeaves.size) {
+                const types = Array.from(new Set(Array.from(literalLeaves).map(leaf => withLogContext(leaf.typeName))));
                 new BnfLayerError(
                     `Cannot use LR parser ` +
                     `because using follow terminals 
                     ${types.map(type => {
-                        const filterd = Array.from(terminalLeaves).filter(leaf => withLogContext(leaf.typeName) === type);
+                        const filterd = Array.from(literalLeaves).filter(leaf => withLogContext(leaf.typeName) === type);
                         return "[" + type + "] : " + filterd.map(leaf => (withLogContext(leaf.syntaxLogText))).join(', ');
                     }).join("\n                    ")}`, 
                     SyntaxError, LogLevel.Info);
@@ -78,19 +80,26 @@ class MyBnfAstManager extends BnfAstManager {
             if(duplicationLeaves.size) {
                 new BnfLayerError(
                     `Cannot use LR parser ` +
-                    `because name conflicts with token adn non terminal: ${Array.from(duplicationLeaves).join(", ")}`, 
+                    `because name conflicts with token and non terminal: ${Array.from(duplicationLeaves).join(", ")}`, 
                     SyntaxError, LogLevel.Info);
             }
         } else {
             this.#enableLRparse = true;
+            new BnfLayerError(`Grammar is LR(1)-parsable. Proceeding with LR parser generation.(${this.ruleForger.name})`, SyntaxError, LogLevel.Info);
         }
     }
     getParser(entryPoint = 'expr', withSystemScope = undefined, resolveRelfRecursion = false) {
         if(this.useLR) {
-
+            return super.getParser(entryPoint, withSystemScope, false);
         } else {
             return super.getParser(entryPoint, withSystemScope, resolveRelfRecursion);
         }
+    }
+    get parserType() {
+        if (this.useLR) {
+            return "LR";
+        }
+        return "LL";
     }
 }
 // BnfAstManagerから構文解析器を作るための機能を抽出したクラス
@@ -125,7 +134,7 @@ class ParserGenerator {
     }
     analyze(str) {
         const strObj = new StringObject(str);
-        this.#bnfAstManager = new MyBnfAstManager(ParserGenerator.Cls);
+        this.#bnfAstManager = new MyBnfAstManager(ParserGenerator.Cls, ClassCategory);
         this.#bnfAstManager.parserGenerator = this;
         this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
     }
@@ -154,14 +163,13 @@ class ParserGenerator {
 class RuleForger {
     #modeDeck = null;
     #astManager = null;
-    #name = undefined;
+    #name = "nameless-forger";
     #token = undefined;
     #parserGenerator;
     #program;
     #entryPoint = 'expr';
     #evaluators;
     #peeks;
-    
     set modeDeck(val) {
         return this.#modeDeck = val;
     }

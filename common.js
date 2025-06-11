@@ -89,7 +89,6 @@ class SearchOrder {
     }
 }
 
-
 class BaseAstNode {
     #string = undefined;
     #pos = undefined;
@@ -265,7 +264,7 @@ class BaseAstNode {
         }
         return false;
     }
-    static CompareToken(left, right) {
+    static CompareNodeType(left, right) {
         return left.constructor === right.constructor;
     }
     static IncrementCacheHit() {
@@ -562,7 +561,7 @@ class BaseAstNode {
         return true;
     }
     addChild(baseAstNode) {
-        if(!this.constructor.CompareToken(this, baseAstNode)) {
+        if(!this.constructor.CompareNodeType(this, baseAstNode)) {
             throw new this.ErrorLayer(`Incompatible instance types: parent is ${this.constructor.name}, child is ${baseAstNode.constructor.name}.`, TypeError);
         }
         baseAstNode.parent = this;
@@ -623,7 +622,7 @@ class BaseAstNode {
         return map;
     }
     swap(newNode) {
-        if(!this.constructor.CompareToken(this, newNode)) {
+        if(!this.constructor.CompareNodeType(this, newNode)) {
             throw new this.ErrorLayer(`Incompatible instance types: parent is ${this.constructor.name}, child is ${newNode.constructor.name}.`, TypeError);
         }
         const index = this.parent.#children.findIndex(node => node === this);
@@ -666,7 +665,7 @@ class BaseAstNode {
 
 class AbstractManager {
     #root;
-    static dump(roots,  option = {}, prefix = "", isLast = true,) {
+    static dump(roots,  option = {}, prefix = "", isLast = true) {
         const arrow = option.arrow || ' -> ';
         const omitLength = option.omitLength || 8;
         const shortBefore = option.shortBefore || 3;
@@ -1048,7 +1047,6 @@ class AstNode extends BaseAstNode {
             return node;
         };
         const {node, path} = climb(this, pathBnfAstNodes);
-        console.log(path.length, pathBnfAstNodes.length);
         const parent = dig(node, path);
         return parent.digFirst(child => child.instance === goalBnfAstNode, {strategy: SearchOrder.BFS});
     }
@@ -2111,6 +2109,7 @@ class BnfAstManager extends AbstractManager {
 class CoreAstNode extends BaseAstNode {
     #args;
     #define;
+    #defineOverride = undefined;
     #parserGenerator = null;
     #lexicalAnalyzer = null;
     static genCount = 0;
@@ -2171,16 +2170,10 @@ class CoreAstNode extends BaseAstNode {
     static baseType() {
         return this.constructor;
     }
-    static CompareToken(left, right) {
+    static CompareNodeType(left, right) {
         return (left instanceof CoreAstNode) && (right instanceof CoreAstNode);
     }
     // Core, User共通のUtil関数
-    lazyReplace(lazyArg, newArg) {
-        const opIndex = this.operands.findIndex(op => op === lazyArg);
-        if(opIndex > -1) {
-            this.operands[opIndex] = newArg;
-        }
-    }
     static get upperAst() {
         return BnfAstNode;
     }
@@ -2202,15 +2195,41 @@ class CoreAstNode extends BaseAstNode {
     get isMyRepeater() {
         return false;
     }
+    overrideOperandsForPreprocess(cond, mapperFn, visited = new Set) {
+        if (typeof mapperFn !== 'function') {
+            new CoreLayerError("mapperFn must be a function", Error);
+        }
+        // キャッシュ機能が有効な時，子孫要素に自身が現れる可能性があるためvisitedをメモしておく
+        visited.add(this);
+        if(cond(this)) {
+            this.#defineOverride = mapperFn(this.#operands.slice(), this);
+            this.override = true;
+        }
+        for(const operand of this.operands) {
+            if(visited.has(operand)) {
+                continue;
+            }
+            // operandsはaddChildクラスを通じて作られたchildrenを参照していて，
+            // addChild関数はCompareNodeTypeによって検証されているため，
+            // operandは必ずCoreAstNodeの派生クラス
+            // なので，overrideOperandsForPreprocessを再帰呼出し可能
+            operand.overrideOperandsForPreprocess(cond, mapperFn, visited);
+        }
+    }
     get operands() {
         if(this.#define === undefined) {
-            if("define" in this) {
-                this.setOperands(this.define);
-            } else {
-                this.setOperands(this.args);
-            }
+            this.setOperands(this.#operands);
         }
         return this.children;
+    }
+    get #operands() {
+        if(this.#defineOverride) {
+            return this.#defineOverride;
+        }
+        if("define" in this) {
+            return this.define;
+        }
+        return this.args;
     }
     setOperands(val) {
         if(this.#define) {
@@ -2344,8 +2363,11 @@ class CoreAstNode extends BaseAstNode {
 class LazyGenerator extends CoreAstNode {
     #class = null;
     #args = [];
+    #overrides = [];
     constructor(parserGenerator, classType, ...args) {
         super(parserGenerator);
+        // TODO:現状の実装だとLazyGeneratorは
+        // 直接的に階層構造を持つ定義を受け入れられない気がする．
         this.#class = classType;
         for(const arg of args) {
             this.#args.push(arg);
@@ -2365,22 +2387,18 @@ class LazyGenerator extends CoreAstNode {
         newArg.parent = this.parent;
         return newArg;
     }
-    static getSuperClass(cls) {
-        let currentClass = cls;
-        while (1) {
-            const base = Object.getPrototypeOf(currentClass);
-            // Function（最上位）またはnullまで来たら終了
-            if (!base || base === Function || base === Function.prototype) {
-                break;
-            }
-            currentClass = base;
-        }
-        return currentClass;
-    }
     testBnf(str, index) {
         const newArg = this.generateOnDemand();
-        this.parent.lazyReplace(this, newArg);
+        this.swap(newArg);
+        // 覚えていた書き換えルールで上書きする
+        for(const override of this.#overrides) {
+            newArg.overrideOperandsForPreprocess(override.cond, override.mapperFn, override.visited);
+        }
         return newArg.testBnf(str, index);
+    }
+    overrideOperandsForPreprocess(cond, mapperFn, visited) {
+        // 遅延生成後に反映できるよう覚えておく．
+        this.#overrides.push({cond, mapperFn, visited});
     }
 }
 
@@ -2447,7 +2465,7 @@ class CoreNonTerminal extends CoreGroup {
             Name.getOrCreate(this.parserGenerator),
             CoreAsterisk.getOrCreate(this.parserGenerator, 
                 CoreTerminal.getOrCreate(this.parserGenerator, NonTerminal.selector),
-                Name.getOrCreate(this.parserGenerator, )
+                Name.getOrCreate(this.parserGenerator)
             )
         ];
     }
@@ -2485,8 +2503,8 @@ class CoreWhite extends CoreNonTerminal {
             CoreAsterisk.getOrCreate(this.parserGenerator, 
                 CoreOr.getOrCreate(
                     this.parserGenerator, 
-                    CoreComment.getOrCreate(this.parserGenerator, ), 
-                    CoreWhiteSpace.getOrCreate(this.parserGenerator, ),
+                    CoreComment.getOrCreate(this.parserGenerator), 
+                    CoreWhiteSpace.getOrCreate(this.parserGenerator),
                 )
             ),
         ];
@@ -2947,7 +2965,7 @@ class UserTerminal extends UserCoreGroup {
         return UserEscape;
     }
     get define() {
-        const escape = this.escape.getOrCreate(this.parserGenerator, );
+        const escape = this.escape.getOrCreate(this.parserGenerator);
         return [
             CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[0]), 
             CoreAsterisk.getOrCreate(this.parserGenerator, CoreOr.getOrCreate(this.parserGenerator, CoreNegTerminalSet.getOrCreate(this.parserGenerator, this.bracket[1], escape.escapeChar), escape)), 
@@ -2999,7 +3017,7 @@ class UserEscape extends UserCoreGroup {
         return '\\';
     }
     get define() {
-        return [CoreTerminal.getOrCreate(this.parserGenerator, this.escapeChar), CoreTerminalDot.getOrCreate(this.parserGenerator, )];
+        return [CoreTerminal.getOrCreate(this.parserGenerator, this.escapeChar), CoreTerminalDot.getOrCreate(this.parserGenerator)];
     }
     static char(bnfAstNode) {
         const char = bnfAstNode.children[1].bnfStr;
@@ -3017,6 +3035,112 @@ class UserEscape extends UserCoreGroup {
     }
 }
 
+class AbstractList extends CoreGroup {
+    #elemGenerator;
+    #option = {};
+    constructor(parserGenerator, elemGenerator, {
+        separator = ',',
+        allowWhite = true,
+        allowTrailing = true,
+        allowEmpty = true,
+    } = {}) {
+        super(parserGenerator);
+        this.#elemGenerator = elemGenerator;
+        this.#option.separator = separator;
+        this.#option.allowWhite = allowWhite;
+        this.#option.allowTrailing = allowTrailing;
+        this.#option.allowEmpty = allowEmpty;
+    }
+    get Asterisk() {
+        return CoreAsterisk;
+    }
+    get Option() {
+        return CoreOption;
+    }
+    get #separator() {
+        if(this.allowWhite) {
+            return [
+                CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
+                CoreTerminal.getOrCreate(this.parserGenerator, this.separator),
+                CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
+            ];
+        }
+        return [
+            CoreTerminal.getOrCreate(this.parserGenerator, this.separator),
+        ];
+    }
+    get #elem() {
+        return [
+            this.elemGenerator(this.parserGenerator),
+        ];
+    }
+    get define() {
+        const def = [
+            ...this.#elem, 
+            this.Asterisk.getOrCreate(this.parserGenerator,
+                ...this.#separator,
+                ...this.#elem,
+            ),
+        ];
+        if(!this.allowEmpty && !this.allowTrailing) {
+            return def;
+        }
+        if(this.allowTrailing) {
+            def.push(this.Option.getOrCreate(this.parserGenerator, ...this.#separator));
+        }
+        if(this.allowEmpty) {
+            return [this.Option.getOrCreate(this.parserGenerator, ...def)];
+        }
+        return def;
+    }
+    get elemGenerator() {
+        return this.#elemGenerator;
+    }
+    get separator() {
+        return this.#option.separator;
+    }
+    get allowWhite() {
+        return this.#option.allowWhite;
+    }
+    get allowTrailing() {
+        return this.#option.allowTrailing;
+    }
+    get allowEmpty() {
+        return this.#option.allowEmpty;
+    }
+}
+
+class CoreList extends AbstractList {}
+
+class UserList extends AbstractList {
+    get Asterisk() {
+        return UserAsterisk;
+    }
+    get Option() {
+        return UserOption;
+    }
+    // Listをユーザー領域（ASTから直接参照されるBNF領域）で使うことはたぶんないので残りの実装は後回し
+}
+
+class Parentheses extends UserCoreGroup {
+    get bracket() {
+        return ['(', ')'];
+    }
+    get define() {
+        return [CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[0]), CoreWhite.getOrCreate(this.parserGenerator), ...this.args, CoreWhite.getOrCreate(this.parserGenerator), CoreTerminal.getOrCreate(this.parserGenerator, this.bracket[1])];
+    }
+    get isEnclosure() {
+        return true;
+    }
+    static valids() {
+        return [2];
+    }
+}
+class Braces extends Parentheses {
+    get bracket() {
+        return ['{', '}'];
+    }
+}
 class LeafCategorizer {
     #leafCategory = null;
     #terminals = null;
@@ -3113,6 +3237,7 @@ module.exports = {
     CorePlus,           // コア内で1回以上の繰り返し処理をするときのCoreRepeater派生クラス
 
     CoreOr,             // コア内での選択ロジックを処理するCoreGroupの派生クラス．選択論理は最長マッチ
+    CoreList,           // コア内での要素羅列を抽象化したCoreGroupの派生クラス
 
     // 以下はパーサジェネレータの表層部分であり，構文解析器からコールされAstNodeを生成する責務を持つ
     UserCoreGroup,      // AstNodeを生成する基本的な実装を組み込んだAbstractGroupの派生クラス．ほとんどのユーザー側ロジックはこれを継承して実装する．
@@ -3124,6 +3249,10 @@ module.exports = {
     FirstOr,            // UserOrの派生クラスで，選択論理がファーストマッチ固定
     UserTerminal,       // UserCoreGroupの派生クラスで，BNF上の終端文字の定義を受け持つ
     UserEscape,         // UserCoreGroupの派生クラスで，UserTerminal内でのエスケープ処理を受け持つ
+
+    UserList,           // AbstractListの派生クラスで，
+    Parentheses,
+    Braces,
 
     LeafCategorizer,
 };

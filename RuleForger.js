@@ -12,6 +12,11 @@ const {
     BnfAstNode,
     BnfAstManager,
     CoreAstNode,
+    AbstractManager,
+    LazyGenerator,
+    CoreWhite,
+    CoreTerminal,
+    UserEscape,
 } = require('./common.js');
 const {
     CoreEntryPoint,
@@ -104,9 +109,12 @@ class MyBnfAstManager extends BnfAstManager {
 }
 // BnfAstManagerから構文解析器を作るための機能を抽出したクラス
 class ParserGenerator {
-    #entryPoint = CoreEntryPoint.getOrCreate(this);
+    #entryPoint = ParserGenerator.EntryPoint.getOrCreate(this);
     #bnfAstManager;
     #ruleForger = null;
+    static get EntryPoint() {
+        return CoreEntryPoint;
+    }
     get lexicalAnalyzer() {
         return this.#entryPoint.lexicalAnalyzer;
     }
@@ -307,6 +315,10 @@ class RuleForger {
         }
         this.#parserGenerator.dumpBnfAST();
     }
+    dumpCoreAst() {
+        ParserGenerator.EntryPoint.getOrCreate(this).dump();
+    }
+
     dumpCacheResult() {
         console.log('     | Cache hit | No cache | Test count');
         console.log('--------------------------------------------');

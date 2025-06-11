@@ -25,6 +25,7 @@ const {
     CoreRepeater,
     CoreAsterisk,
     CoreOption,
+    CoreList,
     CorePlus,
     UserCoreGroup,
     CoreOr,
@@ -35,6 +36,8 @@ const {
     UserTerminal,
     UserEscape,
     UserOr,
+    Parentheses,
+    Braces,
 } = require('./common.js');
 
 const {NotImplementedError, CoreLayerError, BnfLayerError, RuntimeLayerError, UncategorizedLayerError} = require('./Error.js');
@@ -45,7 +48,7 @@ TOKEN : /regexp/ ~flag1 ~flag2 !exclude1 !exclude2 -> valType
 
 class CoreEntryPoint extends CoreGroup {
     get define() {
-        return [CoreAsterisk.getOrCreate(this.parserGenerator, CoreExpr.getOrCreate(this.parserGenerator, ))];
+        return [CoreAsterisk.getOrCreate(this.parserGenerator, CoreExpr.getOrCreate(this.parserGenerator))];
     }
 }
 
@@ -53,12 +56,12 @@ class CoreExpr extends CoreGroup {
     get define() {
         return [
             CoreOr.getOrCreate(this.parserGenerator, 
-                Assign.getOrCreate(this.parserGenerator, ), 
+                Assign.getOrCreate(this.parserGenerator), 
                 CoreOr.getOrCreate(this.parserGenerator, 
                     CoreTerminal.getOrCreate(this.parserGenerator, ';'), 
                     CoreTerminal.getOrCreate(this.parserGenerator, '\n')
                 ), 
-                CoreWhite.getOrCreate(this.parserGenerator, )
+                CoreWhite.getOrCreate(this.parserGenerator)
             )
         ];
     }
@@ -70,8 +73,8 @@ class Assign extends UserCoreGroup {
     }
     get define() {
         return [
-            AssignLeft.getOrCreate(this.parserGenerator, ), CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, Assign.operator), 
-            CoreWhite.getOrCreate(this.parserGenerator, ), AssignRight.getOrCreate(this.parserGenerator, ), CoreWhite.getOrCreate(this.parserGenerator, ), 
+            AssignLeft.getOrCreate(this.parserGenerator), CoreWhite.getOrCreate(this.parserGenerator), CoreTerminal.getOrCreate(this.parserGenerator, Assign.operator), 
+            CoreWhite.getOrCreate(this.parserGenerator), AssignRight.getOrCreate(this.parserGenerator), CoreWhite.getOrCreate(this.parserGenerator), 
         ];
     }
     static assign(bnfAstNode) {
@@ -85,9 +88,9 @@ class Assign extends UserCoreGroup {
 class AssignLeft extends UserCoreGroup {
     get define() {
         return [
-            CoreWhite.getOrCreate(this.parserGenerator, ),
-            MyNonTerminal.getOrCreate(this.parserGenerator, ), 
-            CoreWhite.getOrCreate(this.parserGenerator, ),
+            CoreWhite.getOrCreate(this.parserGenerator),
+            MyNonTerminal.getOrCreate(this.parserGenerator), 
+            CoreWhite.getOrCreate(this.parserGenerator),
         ];
     }
     static argNames(bnfAstNode) {
@@ -105,7 +108,7 @@ class AssignRight extends UserCoreGroup {
     static reuseable = true;
     get define() {
         return [
-            RightValue.getOrCreate(this.parserGenerator, ),
+            RightValue.getOrCreate(this.parserGenerator),
         ];
     }
     static getMostLeftNotNullableTerms(bnfAstNode) {
@@ -122,13 +125,13 @@ class RightValue extends UserCoreGroup {
     static reuseable = true;
     get define() {
         return [
-            UserRegExp.getOrCreate(this.parserGenerator, ),
+            UserRegExp.getOrCreate(this.parserGenerator),
             UserAsterisk.getOrCreate(this.parserGenerator, 
-                CoreWhite.getOrCreate(this.parserGenerator, ),
+                CoreWhite.getOrCreate(this.parserGenerator),
                 UserOr.getOrCreate(this.parserGenerator, 
-                    UserFlag.getOrCreate(this.parserGenerator, ),
-                    UserExclude.getOrCreate(this.parserGenerator, ),
-                    UserType.getOrCreate(this.parserGenerator, ),
+                    UserFlag.getOrCreate(this.parserGenerator),
+                    UserExclude.getOrCreate(this.parserGenerator),
+                    UserType.getOrCreate(this.parserGenerator),
                 ),
             ),
             CoreWhite.getOrCreate(this.parserGenerator, CoreWhite.whiteExcluder),
@@ -183,8 +186,8 @@ class MyNonTerminal extends UserCoreGroup {
     static reuseable = true;
     get define() {
         return [
-            Name.getOrCreate(this.parserGenerator, ), 
-            // CoreAsterisk.getOrCreate(this.parserGenerator, CoreWhite.getOrCreate(this.parserGenerator, ), CoreTerminal.getOrCreate(this.parserGenerator, MyNonTerminal.selector), CoreWhite.getOrCreate(this.parserGenerator, ), Name.getOrCreate(this.parserGenerator, ))
+            Name.getOrCreate(this.parserGenerator), 
+            // CoreAsterisk.getOrCreate(this.parserGenerator, CoreWhite.getOrCreate(this.parserGenerator), CoreTerminal.getOrCreate(this.parserGenerator, MyNonTerminal.selector), CoreWhite.getOrCreate(this.parserGenerator), Name.getOrCreate(this.parserGenerator))
         ];
     }
     static get selector() {
@@ -254,7 +257,7 @@ class UserFlag extends UserCoreGroup {
     get define() {
         return [
             CoreTerminal.getOrCreate(this.parserGenerator, '~'),
-            CoreWhite.getOrCreate(this.parserGenerator, ),
+            CoreWhite.getOrCreate(this.parserGenerator),
             CoreOr.getOrCreate(this.parserGenerator, 
                 CoreTerminal.getOrCreate(this.parserGenerator, "skip"),
                 Name.getOrCreate(this.parserGenerator),
@@ -272,26 +275,16 @@ class UserExclude extends UserCoreGroup {
     get define() {
         return [
             CoreTerminal.getOrCreate(this.parserGenerator, '!'),
-            CoreWhite.getOrCreate(this.parserGenerator, ),
+            CoreWhite.getOrCreate(this.parserGenerator),
             CoreOr.getOrCreate(this.parserGenerator, 
                 Name.getOrCreate(this.parserGenerator),
                 CoreGroup.getOrCreate(
                     this.parserGenerator, 
-                    CoreTerminal.getOrCreate(this.parserGenerator, '{'),
-                    CoreAsterisk.getOrCreate(
-                        this.parserGenerator,
-                        CoreWhite.getOrCreate(this.parserGenerator),
-                        MyNonTerminal.getOrCreate(this.parserGenerator),
-                        CoreWhite.getOrCreate(this.parserGenerator),
-                        CoreTerminal.getOrCreate(this.parserGenerator, ','),
+                    Braces.getOrCreate(this.parserGenerator, 
+                        CoreList.getOrCreate(this.parserGenerator,
+                            generator => MyNonTerminal.getOrCreate(generator)
+                        ),
                     ),
-                    CoreOption.getOrCreate(
-                        this.parserGenerator,
-                        CoreWhite.getOrCreate(this.parserGenerator),
-                        MyNonTerminal.getOrCreate(this.parserGenerator),
-                        CoreWhite.getOrCreate(this.parserGenerator),
-                    ),
-                    CoreTerminal.getOrCreate(this.parserGenerator, '}'),
                 ),
             )
         ];
@@ -316,7 +309,7 @@ class UserType extends UserCoreGroup {
     get define() {
         return [
             CoreTerminal.getOrCreate(this.parserGenerator, '->'),
-            CoreWhite.getOrCreate(this.parserGenerator, ),
+            CoreWhite.getOrCreate(this.parserGenerator),
             Name.getOrCreate(this.parserGenerator),
         ];
     }

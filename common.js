@@ -111,14 +111,17 @@ class BaseAstNode {
     constructor(instance) {
         this.#instance = instance;
         this.#baseType = this.constructor.baseType(instance);
-        for(const trait in this.nodeTraits) {
+        if(!instance) {
+            return;
+        }
+        for(const trait in instance.nodeTraits) {
             if(trait in this) {
                 new CoreLayerError(
                     `Trait(${trait}) is already defined.`, 
                     Error);
             }
             Object.defineProperty(this, trait, {
-                get: () => this.nodeTraits[trait]
+                get: () => instance.nodeTraits[trait]
             })
         }
     }
@@ -637,7 +640,6 @@ class BaseAstNode {
     get leafView() {
         return this.across({followOr: false, onlySymbol: false});
     }
-    
     get leaves() {
         if(this.isUserBranch) {
             const candidates = this.baseType.candidates(this).map(branch => branch.leaves);
@@ -659,7 +661,7 @@ class BaseAstNode {
         return result;
     }
     get nodeTraits() {
-        return this.#baseType.nodeTraits;
+        return this.#instance.nodeTraits;
     }
 }
 
@@ -1378,11 +1380,16 @@ class BnfAstManager extends AbstractManager {
         for (const key of required) {
             if (!this.#BnfClass[key]) throw new BnfLayerError(`Missing required class definition: ${key}`, Error);
         }
-        // this.#leafCategorizer = new LeafCategorizer(leafCategory, branchCategory);
         this.#classCategorizer = new ClassCategorizer(category);
+    }
+    get classCategorizer() {
+        return this.#classCategorizer;
     }
     get leafCategorizer() {
         return this.#classCategorizer.leafCategorizer;
+    }
+    nodeTraits(cls) {
+        return this.classCategorizer.nodeTraits(cls);
     }
     get root() {
         return super.root;
@@ -2128,16 +2135,22 @@ class CoreAstNode extends BaseAstNode {
                 arg.parent = this;
             }
         }
-    }
-    static _nodeTraitsMap = new Map;
-    static get nodeTraits() {
-        if(!this._nodeTraitsMap.has(this)) {
-            this._nodeTraitsMap.set(this, {});
+        for(const trait in this.nodeTraits) {
+            if(trait in this) {
+                new CoreLayerError(
+                    `Trait(${trait}) is already defined.`, 
+                    Error);
+            }
+            Object.defineProperty(this, trait, {
+                get: () => this.nodeTraits[trait]
+            })
         }
-        return this._nodeTraitsMap.get(this);
     }
     get nodeTraits() {
-        return this.constructor.nodeTraits;
+        if(this.parserGenerator) {
+            return this.parserGenerator.nodeTraits(this.constructor);
+        }
+        return {};
     }
     set nodeTraits(val) {
         for(const key in val) {
@@ -2356,6 +2369,52 @@ class CoreAstNode extends BaseAstNode {
     }
     syntaxLogText(bnfAstNode) {
         return bnfAstNode.bnfStr;
+    }
+}
+
+class CoreAstManager extends AbstractManager {
+    #entryPoint = null;
+    #bnfAstManager = null;
+    static get Cls() {
+        new CoreLayerError(``, NotImplementedError);
+    }
+    static get entryPoint() {
+        new CoreLayerError(``, NotImplementedError);
+    }
+    static get bnfAstManager() {
+        new CoreLayerError(``, NotImplementedError);
+    }
+    get bnfAstManager() {
+        return this.#bnfAstManager;
+    }
+    set bnfAstManager(val) {
+        return this.#bnfAstManager = val;
+    }
+    get entryPoint() {
+        return this.#entryPoint;
+    }
+    set entryPoint(val) {
+        return this.#entryPoint = val;
+    }
+    analyze(str, category, hook) {
+        const BaseClass = this.constructor;
+        const strObj = new StringObject(str);
+        this.#bnfAstManager = new BaseClass.bnfAstManager(BaseClass.Cls, category);
+        this.#bnfAstManager.parserGenerator = this;
+        this.#entryPoint = BaseClass.entryPoint.getOrCreate(this);
+        if(hook) {
+            hook(this.#entryPoint, this.#bnfAstManager);
+        }
+        this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
+    }
+    get bnfStr() {
+        return this.#bnfAstManager.root.bnfStr;
+    }
+    dumpBnfAST() {
+        this.#bnfAstManager.dump();
+    }
+    nodeTraits(cls) {
+        return this.#bnfAstManager.nodeTraits(cls);
     }
 }
 
@@ -3170,11 +3229,20 @@ class LeafCategorizer {
 }
 
 class NodeTraitManager {
+    #categorizer
+    #nodeTraitsMap = new Map;
+    constructor(categorizer) {
+        this.#categorizer = categorizer;
+    }
     setTrait(name, setOrObj) {
         if(setOrObj instanceof Set) {
             const set = setOrObj;
             for(const cls of set) {
-                cls.nodeTraits[name] = true;
+                if(!this.#nodeTraitsMap.has(cls)) {
+                    this.#nodeTraitsMap.set(cls, {});
+                }
+                this.#nodeTraitsMap.get(cls)[name] = true;
+                // cls.nodeTraits[name] = true;
             }
         } else {
             const obj = setOrObj;
@@ -3183,10 +3251,16 @@ class NodeTraitManager {
             }
         }
     }
+    get manager() {
+        return this.#categorizer
+    }
+    nodeTraits(cls) {
+        return this.#nodeTraitsMap.get(cls);
+    }
 }
 
 class ClassCategorizer {
-    #traitManager = new NodeTraitManager;
+    #traitManager = new NodeTraitManager(this);
     #leafCategorizer = new LeafCategorizer;
     constructor(category = {}) {
         for(const name in category) {
@@ -3199,6 +3273,10 @@ class ClassCategorizer {
     get leafCategorizer() {
         return this.#leafCategorizer;
     }
+    nodeTraits(cls) {
+        return this.#traitManager.nodeTraits(cls);
+    }
+
 }
 
 module.exports = {
@@ -3212,6 +3290,7 @@ module.exports = {
     AstManager,         // AstNodeの管理クラス
     BnfAstNode,         // パーサジェネレータによって生成された構文木の1ノードで，構文解析用のBaseAstNode派生クラス．
     BnfAstManager,      // BnfAstNodeの管理クラス（主に依存関係の解決を取り扱う）．構文解析としての選択論理は.selectLogicに従う（デフォルト最長マッチ）
+    CoreAstManager,
 
     CoreAstNode,        // パーサジェネレータを構成する構文木の1ノードで，パーサ生成用のBaseAstNode派生クラス．
     // 以下はCoreAstNodeの派生クラス

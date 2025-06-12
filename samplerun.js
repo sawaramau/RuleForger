@@ -11,7 +11,7 @@ END: /:end/
 WHITE: /\\\\s*/ ~skip
 `;
 const sampleTokens = `
-NUMBER: /((\\\\+|-)?[1-9][0-9]*|0)/ !reserve -> int
+NUMBER: /((\\\\+|-)?[1-9][0-9]*|0)/ !reserve !{PLUS} -> int
 PLUS: /\\\\+/ ~reserve;
 WHITE: /\\\\s*/ ~skip
 `;
@@ -44,7 +44,7 @@ expr.minus = ($v1:expr white) $v3:(("-" | white)|"xxx"| white white white) WHITE
 expr.term = $term;
 // expr.NUMBER = $NUMBER
 
-proddiv.prod = $v1:proddiv white "*" white $v2:proddiv.term
+proddiv.prod($v) = $v1:proddiv white "*" white $v2:proddiv.term
 proddiv.div = $v1:proddiv white "/" white $v2:proddiv.term
 proddiv.term = $term
 callJSmode = $start:"<javascript>"  $end:"</javascript>"
@@ -149,12 +149,12 @@ chidlForger.evaluators = evals;
 chidlForger.peeks = evals;
 mainForger.entryPoint = 'entrypoint';
 chidlForger.entryPoint = 'entrypoint';
-const programs = ["1", "1 -xxx 5+ 9", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
+const programs = ["1", "1 -- 5+ 9", "2/3 * 4", "aa - 3", "1234", "123456"]; // termの定義的に，1234はparseできるが123456は1234で打ち止め．
 for(const prog of programs) {
     const result = mainForger.parse("start " + prog + "  :end");
     const result1 = chidlForger.parse(prog);
     console.log('Result:', result.executer.value);
-    chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
+    // chidlForger.dumpProgramAST(); // 特に引数を指定しなければ最後にparseしたプログラムの抽象構文木をdumpする．
 }
 chidlForger.dumpCacheResult();
 const end = performance.now();

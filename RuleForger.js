@@ -17,6 +17,7 @@ const {
     CoreWhite,
     CoreTerminal,
     UserEscape,
+    CoreAstManager,
 } = require('./common.js');
 const {
     CoreEntryPoint,
@@ -108,15 +109,19 @@ class MyBnfAstManager extends BnfAstManager {
     }
 }
 // BnfAstManagerから構文解析器を作るための機能を抽出したクラス
-class ParserGenerator {
-    #entryPoint = ParserGenerator.EntryPoint.getOrCreate(this);
-    #bnfAstManager;
+class ParserGenerator extends  CoreAstManager {
+    #xentryPoint = null;
+    #xbnfAstManager;
     #ruleForger = null;
-    static get EntryPoint() {
+    #token = undefined;
+    static get entryPoint() {
         return CoreEntryPoint;
     }
+    static get bnfAstManager() {
+        return MyBnfAstManager;
+    }
     get lexicalAnalyzer() {
-        return this.#entryPoint.lexicalAnalyzer;
+        return this.entryPoint.lexicalAnalyzer;
     }
     set ruleForger(val) {
         return this.#ruleForger = val;
@@ -128,7 +133,7 @@ class ParserGenerator {
         return this.#ruleForger.modeDeck;
     }
     set token(val) {
-        this.#entryPoint.token = val;
+        this.#token = val;
     }
     static get Cls() {
         const Cls = {};
@@ -141,14 +146,15 @@ class ParserGenerator {
         return Cls;
     }
     analyze(str) {
-        const strObj = new StringObject(str);
-        this.#bnfAstManager = new MyBnfAstManager(ParserGenerator.Cls, ClassCategory);
-        this.#bnfAstManager.parserGenerator = this;
-        this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
+        super.analyze(str, ClassCategory, (entryPoint, bnfAstManager) => {
+            if(this.#token !== undefined) {
+                entryPoint.token = this.#token;
+            }
+        });
     }
     getSyntaxParser(entryPoint = 'expr') {
-        const manager = this.#bnfAstManager;
-        const lexicalAnalyzer = this.#entryPoint.lexicalAnalyzer;
+        const manager = this.bnfAstManager;
+        const lexicalAnalyzer = this.entryPoint.lexicalAnalyzer;
         const ignores = Array.from(lexicalAnalyzer.ignoredTokens).join(" ");
         return manager.getParser(entryPoint, (systemSpace) => {
             const newEp = "ep";
@@ -157,14 +163,8 @@ class ParserGenerator {
             return newEp;
         }, true);
     }
-    get bnfStr() {
-        return this.#bnfAstManager.root.bnfStr;
-    }
-    dumpBnfAST() {
-        this.#bnfAstManager.dump();
-    }
     get allBnfRuleName() {
-        return this.#bnfAstManager.getAllRuleName();
+        return this.bnfAstManager.getAllRuleName();
     }
 }
 
@@ -316,7 +316,7 @@ class RuleForger {
         this.#parserGenerator.dumpBnfAST();
     }
     dumpCoreAst() {
-        ParserGenerator.EntryPoint.getOrCreate(this).dump();
+        // ParserGenerator.entryPoint.getOrCreate(new ParserGenerator).dump();
     }
 
     dumpCacheResult() {

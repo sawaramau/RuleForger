@@ -12,6 +12,7 @@ const {
     StringObject,
     Parentheses,
     Braces,
+    CoreAstManager,
 } = require('./common');
 const {
     CoreEntryPoint,
@@ -66,22 +67,29 @@ class SimpleDictionary extends UserCoreGroup {
     }
 }
 
-class Preprocessor {
-    #entryPoint = Preprocessor.EntryPoint.getOrCreate(this);
-    #bnfAstManager;
-    static get EntryPoint() {
+class Preprocessor extends CoreAstManager {
+    // #xentryPoint = Preprocessor.EntryPoint.getOrCreate(this);
+    // #xbnfAstManager;
+    #remapper = undefined;
+    static get entryPoint() {
         return CoreEntryPoint;
     }
+    static get bnfAstManager() {
+        return BnfAstManager;
+    }
     remap(remappers) {
-        for(const remapper of remappers) {
-            this.#entryPoint.overrideOperandsForPreprocess(remapper.cond, remapper.mapperFn);
-        }
+        this.#remapper = remappers;
     }
     analyze(str) {
-        const strObj = new StringObject(str);
-        this.#bnfAstManager = new BnfAstManager(Preprocessor.Cls, ClassCategory);
-        this.#bnfAstManager.parserGenerator = this;
-        this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
+        super.analyze(str, ClassCategory, entryPoint => {
+            if(!this.#remapper) {
+                return;
+            }
+            const remappers = this.#remapper;
+            for(const remapper of remappers) {
+                entryPoint.overrideOperandsForPreprocess(remapper.cond, remapper.mapperFn);
+            }
+        });
     }
     static get Cls() {
         const Cls = {};
@@ -94,10 +102,10 @@ class Preprocessor {
         return Cls;
     }
     get bnfStr() {
-        return this.#bnfAstManager.root.bnfStr;
+        return this.bnfAstManager.root.bnfStr;
     }
     dumpBnfAST() {
-        this.#bnfAstManager.dump();
+        this.bnfAstManager.dump();
     }
 }
 

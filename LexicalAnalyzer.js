@@ -12,6 +12,7 @@ const {
     BnfAstNode,
     BnfAstManager,
     CoreAstNode,
+    CoreAstManager,
 } = require('./common.js');
 const {
     CoreEntryPoint,
@@ -121,12 +122,12 @@ class MyBnfAstManager extends BnfAstManager {
 }
 
 // BnfAstManagerから構文解析器を作るための機能を抽出したクラス
-class ParserGenerator {
-    #entryPoint = CoreEntryPoint.getOrCreate(this);
-    #bnfAstManager;
+class ParserGenerator extends CoreAstManager {
+    // #entryPoint = CoreEntryPoint.getOrCreate(this);
+    // #bnfAstManager;
     #token = null;
     set token(val) {
-        this.#entryPoint.token = val;
+        this.entryPoint.token = val;
     }
     static get Cls() {
         const Cls = {};
@@ -138,25 +139,27 @@ class ParserGenerator {
         Cls.RightValue = RightValue;
         return Cls;
     }
+    static get entryPoint() {
+        return CoreEntryPoint;
+    }
+    static get bnfAstManager() {
+        return MyBnfAstManager;
+    }
     analyze(str) {
-        const strObj = new StringObject(str);
-        // BnfAstManagerは依存関係の解析や名前解決をメインタスクとした管理クラス．
-        this.#bnfAstManager = new MyBnfAstManager(ParserGenerator.Cls);
-        this.#bnfAstManager.parserGenerator = this;
-        this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
-        this.#token = this.#bnfAstManager.getAllRuleName();
+        super.analyze(str);
+        this.#token = this.bnfAstManager.getAllRuleName();
+        // const strObj = new StringObject(str);
+        // // BnfAstManagerは依存関係の解析や名前解決をメインタスクとした管理クラス．
+        // this.#bnfAstManager = new MyBnfAstManager(ParserGenerator.Cls);
+        // this.#bnfAstManager.parserGenerator = this;
+        // this.#bnfAstManager.root = this.#entryPoint.primaryParser.parse(strObj).node;
+        // this.#token = this.#bnfAstManager.getAllRuleName();
     }
     get token() {
         return new Set(this.#token);
     }
     getLexicalParser(entryPoint = 'expr') {
-        return this.#bnfAstManager.getParser(entryPoint);
-    }
-    get bnfStr() {
-        return this.#bnfAstManager.root.bnfStr;
-    }
-    dumpBnfAST() {
-        this.#bnfAstManager.dump();
+        return this.bnfAstManager.getParser(entryPoint);
     }
     hasToken(strObj, index) {
         const hits = this.#token.filter(token => strObj.read(index, token.length) === token);
@@ -169,13 +172,13 @@ class ParserGenerator {
         return max;
     }
     setEvaluate(astNode, result) {
-        return this.#bnfAstManager.setEvaluate(astNode, result);
+        return this.bnfAstManager.setEvaluate(astNode, result);
     }
     get ignoredTokens() {
-        return this.#bnfAstManager.ignoredTokens;
+        return this.bnfAstManager.ignoredTokens;
     }
     getExcludes(ruleName) {
-        return this.#bnfAstManager.getExcludes(ruleName);
+        return this.bnfAstManager.getExcludes(ruleName);
     }
 }
 

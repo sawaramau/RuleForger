@@ -688,7 +688,6 @@ class AbstractManager {
         console.log(prefix + connector + label);
         const children = (end.children || []).filter(child => !excluder(child));
         const newPrefix = prefix + (isLast ? "    " : "│   ");
-
         for(const [index, child] of children.entries()) {
             // children.lengthが1な限り，インデント深さを抑えるために横方向に展開する．
             const singleChildChain = this.SingleChildChain(child, excluder);
@@ -696,11 +695,11 @@ class AbstractManager {
             this.dump(singleChildChain, option, newPrefix, isLastChild);
         }
     }
-    static SingleChildChain(node, excluder = node => false) {
+    static SingleChildChain(node, excluder = (node) => false) {
         const chain = [node];
         let currentNode = node;
         while(1) {
-            const children = currentNode.children.filter(child => !excluder(child))
+            const children = currentNode.children.filter(child => !excluder(child));
             if(children.length !== 1) {
                 break;
             }
@@ -2448,6 +2447,7 @@ class LazyGenerator extends CoreAstNode {
     }
     testBnf(str, index) {
         const newArg = this.generateOnDemand();
+        newArg.isLazyGenerated = true;
         this.swap(newArg);
         // 覚えていた書き換えルールで上書きする
         for(const override of this.#overrides) {

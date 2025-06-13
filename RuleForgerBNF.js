@@ -70,17 +70,18 @@ class CoreEntryPoint extends CoreGroup {
     }
     dump() {
         this.recursive(node => {
-            if(node === LazyGenerator) {
+            if(node === LazyGenerator || node.isLazyGenerated) {
                 return node;
             }
             node.operands;
             return false;
         });
-        AbstractManager.dump([this], {excluder: node => {
+        AbstractManager.dump([this], {excluder: (node) => {
             return node instanceof CoreWhite || 
             node instanceof CoreTerminal || 
             node instanceof UserEscape || 
             node.parent instanceof MyTerminals ||
+            node.isLazyGenerated ||
             (node instanceof MyRepeater && !(node instanceof MyAsterisk));
         }});
     }

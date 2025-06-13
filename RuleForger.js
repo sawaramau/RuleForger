@@ -316,7 +316,7 @@ class RuleForger {
         this.#parserGenerator.dumpBnfAST();
     }
     dumpCoreAst() {
-        // ParserGenerator.entryPoint.getOrCreate(new ParserGenerator).dump();
+        ParserGenerator.entryPoint.getOrCreate(this.#parserGenerator).dump();
     }
 
     dumpCacheResult() {

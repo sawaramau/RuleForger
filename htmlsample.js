@@ -21,5 +21,5 @@ mainForger.entryPoint = 'Tag';
 const programs = ["<html a=x><div>aa</div>  </html>"];
 for(const prog of programs) {
     mainForger.parse(prog);
-    mainForger.dumpProgramAST();
+    // mainForger.dumpProgramAST();
 }

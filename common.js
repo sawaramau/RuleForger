@@ -792,7 +792,7 @@ class Evaluator {
             return this.#src;
         }
         if(this.#src instanceof AstNode) {
-            const args = this.args;
+            const args = this.#actionArgs;
             const evaluate = this.#src.evaluate;
             if(evaluate) {
                 return evaluate(args, this.str);
@@ -802,9 +802,13 @@ class Evaluator {
                 const keys = Object.keys(args);
                 if(keys.length === 1) {
                     return args[keys[0]].value;
-                } else {
-                    throw new BnfLayerError(`Not implemented for [${this.nameHierarchy}] action.`, NotImplementedError);
                 }
+                // 親要素側でルールが定義されていればそれを参照する
+                const inheritedEvaluate = this.#src.inheritedEvaluate;
+                if(inheritedEvaluate) {
+                    return inheritedEvaluate(args, this.str);
+                }
+                throw new BnfLayerError(`Not implemented for [${this.nameHierarchy}] action.`, NotImplementedError);
             }
             return this.str;
         } else {
@@ -838,13 +842,46 @@ class Evaluator {
         }
         return this.#src.reduce((acc, cur) => acc += cur.str, "");
     }
-    get args() {
+    static createRestrictedProxy(obj, allowList = new Set, {readOnly = true} = {}) {
+        if(allowList instanceof Array) {
+            allowList = new Set(allowList);
+        }
+        const proxy = new Proxy(obj, {
+            get(target, prop, reciever) {
+                if(allowList.has(prop)) {
+                    return Reflect.get(target, prop, reciever);
+                }
+                if(prop in target) {
+                    new AstLayerError(
+                        `Property '${String(prop)}' can not access via this instance.\n` +
+                        `  Accessable properties: [${Array.from(allowList).join(', ')}]`, 
+                         SyntaxError);
+                }
+                new AstLayerError(
+                    `Property '${String(prop)}' is not defined.\n` +
+                    `  Accessable properties: [${Array.from(allowList).join(', ')}]`, 
+                    SyntaxError);
+            },
+            set(target, prop, value, reciever) {
+                if(readOnly) {
+                    new AstLayerError(`Cannot set this instance.`);
+                }
+                allowList.add(prop);
+                return Reflect.set(target, prop, value, reciever);
+            },
+            has(target, prop) {
+                return allowList.has(prop);
+            }
+        });
+        return proxy;
+    }
+    get #actionArgs() {
         if(!(this.#src instanceof AstNode)) {
             return undefined;
         }
         const astNode = this.#src;
         const args = (() => {
-            const $ = {};
+            const $args = {};
             let bnf = undefined;
             const record = (t) => {
                 const anchor = t.anchor;
@@ -853,17 +890,17 @@ class Evaluator {
                     val.#anchor = anchor;
                 }
                 if(t.includedIteration) {
-                    if($[anchor] === undefined) {
-                        $[anchor] = new Evaluator([]);
+                    if($args[anchor] === undefined) {
+                        $args[anchor] = new Evaluator([]);
                         bnf = t.instance;
                     }
                     if(bnf !== t.instance) {
                         throw new UncategorizedLayerError(`Already assigned ${anchor}`, SyntaxError);
                     }
-                    $[anchor].#src.push(val);
+                    $args[anchor].#src.push(val);
                 } else {
-                    if($[anchor] === undefined) {
-                        $[anchor] = val;
+                    if($args[anchor] === undefined) {
+                        $args[anchor] = val;
                     } else {
                         throw new UncategorizedLayerError(`Already assigned ${anchor}`, SyntaxError);
                     }
@@ -882,9 +919,9 @@ class Evaluator {
                 undefined,
                 {includeSelf: false}
             );
-            return $;
+            return $args;
         })();
-        return args;
+        return Evaluator.createRestrictedProxy(args, Object.keys(args));
     }
     get pos() {
         if(this.#src instanceof AstNode) {
@@ -896,7 +933,7 @@ class Evaluator {
             return this.#src;
         }
         if(this.#src instanceof AstNode) {
-            const args = this.args;
+            const args = this.#actionArgs;
             if(this.#src.astManager.peeks.has(this.nameHierarchy)) {
                 const actions = this.#src.astManager.peeks.get(this.#src.nameHierarchy);
                 if(actions.has(caller)) {
@@ -933,6 +970,7 @@ class Evaluator {
 
 class AstNode extends BaseAstNode {
     #nameHierarchy = undefined;
+    #nameHierarchyRaw = null;
     #evaluator = null;
     #isBoundary = false;
     #evaluate = undefined;
@@ -975,24 +1013,11 @@ class AstNode extends BaseAstNode {
         return false;
     }
     set nameHierarchy(nameHierarchy) {
-        this.#nameHierarchy = nameHierarchy;
+        this.#nameHierarchyRaw = nameHierarchy;
+        this.#nameHierarchy = this.#nameHierarchyRaw.hierarchy.join(this.#nameHierarchyRaw.selector);
     }
     get nameHierarchy() {
         return this.#nameHierarchy;
-    }
-    isNameHierarchy(hierarchy) {
-        if(this.#nameHierarchy) {
-            if(this.#nameHierarchy.length !== hierarchy.length) {
-                return false;
-            }
-            for(const [i, name] of this.#nameHierarchy.entries()) {
-                if(name !== hierarchy[i]) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        return false;
     }
     get label() {
         const label = this.instance.str;
@@ -1016,6 +1041,9 @@ class AstNode extends BaseAstNode {
         this.cacheNouse++;
         super.IncrementCacheNouse();
     }
+    get parentEvaluate() {
+
+    }
     get evaluate() {
         if(!this.#evaluate && this.astManager.evaluators.has(this.nameHierarchy)) {
             this.#evaluate = this.astManager.evaluators.get(this.nameHierarchy);
@@ -1024,6 +1052,16 @@ class AstNode extends BaseAstNode {
     }
     set evaluate(val) {
         return this.#evaluate = val;
+    }
+    get inheritedEvaluate() {
+        const selector = this.#nameHierarchyRaw.selector;
+        for(let i = 1; i < this.#nameHierarchyRaw.hierarchy.length; i++) {
+            const nameHierarchy = this.#nameHierarchyRaw.hierarchy.slice(0, -i).join(selector);
+            if(this.astManager.evaluators.has(nameHierarchy)) {
+                return this.astManager.evaluators.get(nameHierarchy);
+            }
+        }
+        return undefined;
     }
     get Ready() {
         if(this.baseType.Ready) {
@@ -1717,7 +1755,7 @@ class BnfAstManager extends AbstractManager {
         const relatedSpaces = this.#getRelatedNameSpaces(nameSpace);
         const relatedCond = relatedSpaces.filter(space => space.hasNonRecursiveTerms);
         if(relatedCond.length === 0) {
-            const fullName = this.getFullNameStr(nameSpace);
+            const fullName = this.getFullName(nameSpace, true);
             throw new BnfLayerError(
                 `Left-recursive rule requires at least one base (non-recursive) case to terminate. ` +
                 `(Line:${nameSpace.left.pos.line} Column:${nameSpace.left.pos.column} ` +
@@ -1800,7 +1838,7 @@ class BnfAstManager extends AbstractManager {
                         const parent = recursiveParser.parse(strObj, seed);
                         parent.node.digOne(DummyOperand, {required: true}).swap(leaf.node);
                         const nonUserTerminal = leaf.node.parent;
-                        nonUserTerminal.nameHierarchy = this.getFullNameStr(leaf.space);
+                        nonUserTerminal.nameHierarchy = this.getFullName(leaf.space);
                         leaf = parent;
                     }
                     return leaf;
@@ -1892,7 +1930,7 @@ class BnfAstManager extends AbstractManager {
         };
         this.root.recursive(stopper, process);
     }
-    getFullNameStr(nameSpace) {
+    getFullName(nameSpace, isStr = false) {
         const {
             NonTerminal,
         } = this.Cls;
@@ -1910,7 +1948,13 @@ class BnfAstManager extends AbstractManager {
                 break;
             }
         }
-        return hierarchy.map(space => space.name).join(NonTerminal.selector);
+        if(isStr) {
+            return hierarchy.map(space => space.name).join(NonTerminal.selector);
+        }
+        return {
+            hierarchy: hierarchy.map(space => space.name),
+            selector: NonTerminal.selector,
+        };
     }
     #getSpacesByNonTerminal(bnfAstNode) {
         const {
@@ -2291,7 +2335,7 @@ class CoreAstNode extends BaseAstNode {
         }
     }
     static generateEvaluator(astNode) {
-        // 特に指定がないとき，token.childrenからevaluateを得る
+        // 特に指定がないとき，astNode.childrenからevaluateを得る
         if(astNode.children.length === 1) {
             return astNode.children[0].evaluator;
         }

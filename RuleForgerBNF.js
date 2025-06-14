@@ -478,7 +478,7 @@ class RightElement extends UserCoreGroup {
         return [1];
     }
     static generateEvaluator(astNode) {
-        const selected = astNode.children[0].children[0];
+        const selected = astNode.digOne(UserOr).children[0];
         const selectedType = selected.instance.baseType;
         if(BnfAstNode.isSubClassOf(selectedType, Parentheses)) {
             return selected.children[0].evaluator;
@@ -565,7 +565,7 @@ class MyNonTerminal extends UserCoreGroup {
             };
             const process = (astNode, strObj, result, seed) => {
                 if(!seed || !bnfAstNode.isRecursive) {
-                    astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullNameStr(result.space);
+                    astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullName(result.space);
                     return parser.process(astNode, strObj, result, seed);
                 }
                 // 自身が左再帰であるならば，そもそもparse時点で呼ばれるべきではない．

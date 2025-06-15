@@ -62,14 +62,12 @@ class MyBnfAstManager extends BnfAstManager {
         if(!this.#useLRparse) {
             return;
         }
-        const tokenSet = this.leafCategorizer.literal;
-        const nonTerminalSet = this.leafCategorizer.nonTerminal;
-        const literalSet = this.leafCategorizer.literal;
+        const leafCategorizer = this.leafCategorizer;
         const leaves = rootBnfAstNode.leaves.flat(Infinity);
-        const tokenLeaves = new Set(leaves.filter(leaf => tokenSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
-        const nonTerminalLeaves = new Set(leaves.filter(leaf => nonTerminalSet.has(leaf.baseType)).map(leaf => leaf.bnfStr));
+        const tokenLeaves = new Set(leaves.filter(leaf => leafCategorizer.isToken(leaf.baseType)).map(leaf => leaf.bnfStr));
+        const nonTerminalLeaves = new Set(leaves.filter(leaf => leafCategorizer.isNonTerminal(leaf.baseType)).map(leaf => leaf.bnfStr));
         const duplicationLeaves = nonTerminalLeaves.intersection(tokenLeaves);
-        const literalLeaves = new Set(leaves.filter(leaf => literalSet.has(leaf.baseType)));
+        const literalLeaves = new Set(leaves.filter(leaf => leafCategorizer.isLiteral(leaf.baseType)));
         if(literalLeaves.size || duplicationLeaves.size) {
             this.#enableLRparse = false;
             if(literalLeaves.size) {

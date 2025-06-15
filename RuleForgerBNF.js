@@ -480,7 +480,7 @@ class RightElement extends UserCoreGroup {
     static generateEvaluator(astNode) {
         const selected = astNode.digOne(UserOr).children[0];
         const selectedType = selected.instance.baseType;
-        if(BnfAstNode.isSubClassOf(selectedType, Parentheses)) {
+        if(selectedType.isSubClassOf(Parentheses)) {
             return selected.children[0].evaluator;
         } else {
             return new Evaluator(selected);
@@ -1278,12 +1278,16 @@ const LeafCategory = {
 };
 
 const ClassCategory = {
-    isUserLeaf: LeafCategory,
-    isUserBranch: new Set([MyOr, BnfOr]),
-    isRenamer: new Set([Renamer]),
-    isTest: new Set([Reference]),
-    isLRops: new Set([Token, MyNonTerminal, Commands]),
-    isSymbol: new Set([Token, MyTerminals, MyNonTerminal]),
+    byConstructor : {
+        isUserLeaf: LeafCategory,
+        isRenamer: new Set([Renamer]),
+        isSymbol: new Set([Token, MyTerminals, MyNonTerminal]),
+        isLRops: new Set([Token, MyNonTerminal, Commands]),
+    },
+    byInherited : {
+        isUserRule: new Set([UserCoreGroup, Token]),
+        isUserBranch: new Set([MyOr, BnfOr]),
+    },
 };
 
 module.exports = {

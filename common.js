@@ -128,8 +128,8 @@ class BaseAstNode {
     get ErrorLayer() {
         return BaseLayerError;
     }
-    static isSuperClassOf(cls) {
-        let currentClass = cls;
+    static isSuperClassOf(childCls) {
+        let currentClass = childCls;
         while (1) {
             if(this === currentClass) {
                 return true;
@@ -140,6 +140,16 @@ class BaseAstNode {
                 break;
             }
             currentClass = base;
+        }
+        return false;
+    }
+    static isSubClassOf(parentCls) {
+        if (typeof parentCls !== 'function') return false;
+
+        let proto = this.prototype;
+        while (proto) {
+            if (proto === parentCls.prototype) return true;
+            proto = Object.getPrototypeOf(proto);
         }
         return false;
     }
@@ -257,16 +267,6 @@ class BaseAstNode {
             }
         }
     }
-    static isSubClassOf(child, parent) {
-        if (typeof child !== 'function' || typeof parent !== 'function') return false;
-    
-        let proto = child.prototype;
-        while (proto) {
-            if (proto === parent.prototype) return true;
-            proto = Object.getPrototypeOf(proto);
-        }
-        return false;
-    }
     static CompareNodeType(left, right) {
         return left.constructor === right.constructor;
     }
@@ -292,10 +292,10 @@ class BaseAstNode {
         }
         const funcs = {
             class: node => {
-                return node.constructor.isSubClassOf(node.baseType, cls);
+                return node.baseType.isSubClassOf(cls);
             },
             array: node => {
-                return cls.find(c => node.constructor.isSubClassOf(node.baseType, c))
+                return cls.find(c => node.baseType.isSubClassOf(c))
             },
             function: node => {
                 return cls(node);
@@ -381,10 +381,10 @@ class BaseAstNode {
         }
         const funcs = {
             class: node => {
-                return node.constructor.isSubClassOf(node.baseType, cls);
+                return node.baseType.isSubClassOf(cls);
             },
             array: node => {
-                return cls.find(c => node.constructor.isSubClassOf(node.baseType, c))
+                return cls.find(c => node.baseType.isSubClassOf(c))
             },
             function: node => {
                 return cls(node);
@@ -427,7 +427,7 @@ class BaseAstNode {
         return null;
     }
     assertBaseInstanceOf(cls) {
-        if(!this.constructor.isSubClassOf(this.baseType, cls)) {
+        if(!this.baseType.isSubClassOf(cls)) {
             throw new this.ErrorLayer(
                 `${this.constructor.name}: Basetype mismatch: expected ${cls.name} but received ${this.baseType.name}`, 
                 TypeError);
@@ -926,6 +926,9 @@ class Evaluator {
     get pos() {
         if(this.#src instanceof AstNode) {
             return this.#src.pos;
+        }
+        if(this.#src instanceof Array) {
+            return this.#src[0].pos;
         }
     }
     peek(caller, instance) {
@@ -3244,74 +3247,101 @@ class Braces extends Parentheses {
         return ['{', '}'];
     }
 }
-class LeafCategorizer {
-    #leafCategory = null;
-    #terminals = null;
-    #symbols = null;
-    constructor() {
-    }
-    setLeaf(category) {
-        this.#leafCategory = category;
-        this.#terminals = this.token.union(this.literal);
-        this.#symbols = this.terminal.union(this.nonTerminal);
-    }
-    get token() {
-        return this.#leafCategory?.token || new Set;
-    }
-    get literal() {
-        return this.#leafCategory?.literal || new Set;
-    }
-    get nonTerminal() {
-        return this.#leafCategory?.nonTerminal || new Set;
-    }
-    get terminal() {
-        return this.#terminals;
-    }
-    get symbol() {
-        return this.#symbols;
-    }
-}
-
 class NodeTraitManager {
-    #categorizer
     #nodeTraitsMap = new Map;
-    constructor(categorizer) {
-        this.#categorizer = categorizer;
-    }
+    #nodeTraitsInherited = new Map;
+    #knownCls = new Set;
     setTrait(name, setOrObj) {
+        this.#scroll(setOrObj, (cls) => {
+            if(!this.#nodeTraitsMap.has(cls)) {
+                this.#nodeTraitsMap.set(cls, {});
+            }
+            this.#nodeTraitsMap.get(cls)[name] = true;
+        });
+    }
+    setTraitByInherited(name, setOrObj) {
+        this.#scroll(setOrObj, (cls) => {
+            if(!this.#nodeTraitsInherited.has(name)) {
+                this.#nodeTraitsInherited.set(name, new Set);
+            }
+            this.#nodeTraitsInherited.get(name).add(cls);
+        });
+    }
+    #scroll(setOrObj, fn) {
         if(setOrObj instanceof Set) {
             const set = setOrObj;
             for(const cls of set) {
-                if(!this.#nodeTraitsMap.has(cls)) {
-                    this.#nodeTraitsMap.set(cls, {});
-                }
-                this.#nodeTraitsMap.get(cls)[name] = true;
-                // cls.nodeTraits[name] = true;
+                fn(cls);
             }
         } else {
             const obj = setOrObj;
             for(const key in obj) {
-                this.setTrait(name, obj[key]);
+                this.#scroll(obj[key], fn);
             }
         }
     }
-    get manager() {
-        return this.#categorizer
-    }
     nodeTraits(cls) {
-        return this.#nodeTraitsMap.get(cls);
+        if(!this.#nodeTraitsMap.has(cls)) {
+            this.#nodeTraitsMap.set(cls, {});
+        }
+        const traits = this.#nodeTraitsMap.get(cls);
+        if(!this.#knownCls.has(cls)) {
+            this.#knownCls.add(cls);
+            for(const [flag, clsSet] of this.#nodeTraitsInherited.entries()) {
+                for(const superCls of clsSet) {
+                    if(cls.isSubClassOf(superCls)) {
+                        traits[flag] = true;
+                    }
+                }
+            }
+        }
+        return traits;
+    }
+}
+
+class LeafCategorizer extends NodeTraitManager {
+    setLeaf(name, setOrObj) {
+        this.setTrait(name, setOrObj);
+    }
+    setLeafByInherited(name, setOrObj) {
+        this.setTraitByInherited(name, setOrObj);
+    }
+    isToken(cls) {
+        return this.nodeTraits(cls).token === true;
+    }
+    isNonTerminal(cls) {
+        return this.nodeTraits(cls).nonTerminal === true;
+    }
+    isLiteral(cls) {
+        return this.nodeTraits(cls).literal === true;
     }
 }
 
 class ClassCategorizer {
-    #traitManager = new NodeTraitManager(this);
+    #traitManager = new NodeTraitManager;
     #leafCategorizer = new LeafCategorizer;
-    constructor(category = {}) {
-        for(const name in category) {
-            this.#traitManager.setTrait(name, category[name]);
+    constructor(categories = {}) {
+        if(categories.byConstructor) {
+            const category = categories.byConstructor;
+            for(const name in category) {
+                this.#traitManager.setTrait(name, category[name]);
+            }
+            if(category.isUserLeaf) {
+                for(const name in category.isUserLeaf) {
+                    this.#leafCategorizer.setLeaf(name, category.isUserLeaf[name]);
+                }
+            }
         }
-        if(category.isUserLeaf) {
-            this.#leafCategorizer.setLeaf(category.isUserLeaf);
+        if(categories.byInherited) {
+            const category = categories.byInherited;
+            for(const name in category) {
+                this.#traitManager.setTraitByInherited(name, category[name]);
+            }
+            if(category.isUserLeaf) {
+                for(const name in category.isUserLeaf) {
+                    this.#leafCategorizer.setLeafByInherited(name, category.isUserLeaf[name]);
+                }
+            }
         }
     }
     get leafCategorizer() {

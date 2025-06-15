@@ -198,6 +198,7 @@ class MyNonTerminal extends UserCoreGroup {
         return bnfAstNode.dig(Name);
     }
     static generateEvaluator(astNode) {
+        throw "here is not use current.";
         return new Evaluator(astNode);
     }
     static LL = class extends this.superCls {
@@ -208,7 +209,7 @@ class MyNonTerminal extends UserCoreGroup {
                 return result;
             };
             const process = (astNode, strObj, result, seed) => {
-                astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullNameStr(result.space);
+                astNode.nameHierarchy = bnfAstNode.bnfAstManager.getFullName(result.space);
                 return parser.process(astNode, strObj, result, seed);
             };
             return AstNode.parserWrapper(bnfAstNode, test, process);
